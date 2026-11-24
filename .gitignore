@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Production build output
+dist/
+
+# Logs and environment
+*.log
+.env
+.env.*
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
