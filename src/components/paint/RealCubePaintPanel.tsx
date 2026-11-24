@@ -46,7 +46,7 @@ export const RealCubePaintPanel: React.FC<RealCubePaintPanelProps> = ({
   };
 
   return (
-    <div className="flex flex-col h-full overflow-y-auto max-h-[85vh] p-4 glass-panel rounded-3xl shadow-2xl border border-sky-500/20 max-w-xl w-full mx-auto select-none">
+    <div className="flex flex-col gap-3 w-full select-none">
       {/* 1. Benchmark Holding Orientation Card */}
       <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-sky-900/40 via-blue-900/30 to-indigo-900/40 border border-sky-400/30 p-3.5 mb-3 shadow-lg">
         <div className="flex items-start gap-3">

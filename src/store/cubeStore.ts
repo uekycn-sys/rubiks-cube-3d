@@ -46,8 +46,9 @@ export interface AppState {
   currentStepIndex: number;
   historyFacelets: string[]; // 54-facelet string at each step (0 .. totalSteps)
   isAutoPlay: boolean;
+  playMode: 'continuous' | 'followAlong';
   autoPlayInterval: number; // ms: 1500, 3000, 5000
-  playbackSpeed: number;    // 0.5, 1.0, 2.0
+  playbackSpeed: number;    // 0.5, 1.0, 2.0, 4.0
   isTutorFinished: boolean;
 
   // Level & Speedrun State (prepared for Phase 4)
@@ -78,8 +79,9 @@ class StateStore {
       currentStepIndex: 0,
       historyFacelets: [SOLVED_FACELETS],
       isAutoPlay: false,
-      autoPlayInterval: 3000,
-      playbackSpeed: 0.6,
+      playMode: 'continuous',
+      autoPlayInterval: 1500,
+      playbackSpeed: 1.0,
       isTutorFinished: false,
 
       currentLevelIndex: 0,

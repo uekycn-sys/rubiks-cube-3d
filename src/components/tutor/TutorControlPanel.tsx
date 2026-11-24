@@ -20,20 +20,26 @@ export const TutorControlPanel: React.FC<TutorControlPanelProps> = ({
     instructions,
     currentStepIndex,
     historyFacelets,
-    isAutoPlay,
     autoPlayInterval,
     playbackSpeed,
     isTutorFinished,
   } = useCubeStore();
 
-  const [isExecutingMove, setIsExecutingMove] = useState(false);
-  const autoPlayTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [activePlayType, setActivePlayType] = useState<'continuous' | 'followAlong'>('continuous');
+  const [isExecutingSingleMove, setIsExecutingSingleMove] = useState(false);
+
+  // Playback Session Lock & Version Token (prevents React closure race conditions)
+  const playSessionIdRef = useRef(0);
+  const isPlayingRef = useRef(false);
+
   const timelineScrollRef = useRef<HTMLDivElement>(null);
+  const capsuleRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   const totalSteps = solutionMoves.length;
   const currentInstruction = instructions[currentStepIndex];
 
-  // Align camera and show guide when current step changes
+  // 1. Align 3D guide arrow to current step
   useEffect(() => {
     if (!engine) return;
 
@@ -45,37 +51,126 @@ export const TutorControlPanel: React.FC<TutorControlPanelProps> = ({
     }
   }, [engine, currentStepIndex, totalSteps, solutionMoves, isTutorFinished]);
 
-  // Keep active timeline capsule visible in horizontal scroll
+  // 2. Center active step capsule in timeline
   useEffect(() => {
-    if (!timelineScrollRef.current) return;
-    const activeEl = timelineScrollRef.current.children[currentStepIndex] as HTMLElement;
+    const activeEl = capsuleRefs.current[currentStepIndex];
     if (activeEl) {
       activeEl.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
     }
   }, [currentStepIndex]);
 
-  // Handle Step Forward
+  // 3. Stop playback safely
+  const stopPlayback = useCallback(() => {
+    playSessionIdRef.current++;
+    isPlayingRef.current = false;
+    setIsPlaying(false);
+    engine?.cancelAnimations();
+  }, [engine]);
+
+  // 4. Start playback loop with guaranteed async landing
+  const startPlayback = useCallback(
+    async (type: 'continuous' | 'followAlong') => {
+      if (!engine) return;
+
+      // If already at end or finished, rewind to step 0 to replay
+      if (store.getState().currentStepIndex >= totalSteps) {
+        store.setState({ currentStepIndex: 0, isTutorFinished: false });
+        const initFacelets = store.getState().historyFacelets[0];
+        engine.setStateFromFacelets(initFacelets);
+        await new Promise((r) => setTimeout(r, 80));
+      }
+
+      const sessionId = ++playSessionIdRef.current;
+      isPlayingRef.current = true;
+      setIsPlaying(true);
+      setActivePlayType(type);
+
+      while (isPlayingRef.current && playSessionIdRef.current === sessionId) {
+        const latestIdx = store.getState().currentStepIndex;
+        const moves = store.getState().solutionMoves;
+
+        if (latestIdx >= moves.length) {
+          store.setState({ isTutorFinished: true });
+          break;
+        }
+
+        const move = moves[latestIdx];
+        const currentSpeed = store.getState().playbackSpeed || 1.0;
+        const waitInterval = store.getState().autoPlayInterval || 1500;
+
+        // Show 3D guide arrow for current step
+        engine.showTutorGuide(move);
+
+        // Turn duration dynamically computed by speed
+        // 0.5x -> 750ms, 1.0x -> 380ms, 2.0x -> 200ms, 4.0x -> 100ms
+        const turnDuration = Math.max(80, Math.round(380 / currentSpeed));
+
+        // Await full 3D rotation landing & orthogonal snap
+        await engine.playMoveAsync(move, turnDuration);
+
+        // Check if user clicked pause/stop during move execution
+        if (playSessionIdRef.current !== sessionId || !isPlayingRef.current) {
+          break;
+        }
+
+        const nextIdx = latestIdx + 1;
+        store.setState({ currentStepIndex: nextIdx });
+
+        if (nextIdx >= moves.length) {
+          store.setState({ isTutorFinished: true });
+          break;
+        }
+
+        // Pause before next step
+        const pauseMs = type === 'continuous' ? 120 : waitInterval;
+        if (pauseMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, pauseMs));
+        }
+      }
+
+      if (playSessionIdRef.current === sessionId) {
+        isPlayingRef.current = false;
+        setIsPlaying(false);
+      }
+    },
+    [engine, totalSteps]
+  );
+
+  // Toggle playback mode
+  const handleTogglePlay = (type: 'continuous' | 'followAlong') => {
+    if (isPlaying && activePlayType === type) {
+      stopPlayback();
+    } else {
+      stopPlayback();
+      setTimeout(() => startPlayback(type), 30);
+    }
+  };
+
+  // 5. Handle Single Step Forward
   const handleNextStep = useCallback(async () => {
-    if (!engine || isExecutingMove || currentStepIndex >= totalSteps) return;
+    if (!engine || isExecutingSingleMove || currentStepIndex >= totalSteps) return;
+    stopPlayback();
 
-    setIsExecutingMove(true);
-    engine.hideTutorGuide();
-
+    setIsExecutingSingleMove(true);
     const move = solutionMoves[currentStepIndex];
-    await engine.applyMove(move, playbackSpeed);
+    const currentSpeed = store.getState().playbackSpeed || 1.0;
+    const turnDuration = Math.max(80, Math.round(380 / currentSpeed));
+
+    await engine.playMoveAsync(move, turnDuration);
 
     const nextIndex = currentStepIndex + 1;
     store.setState({ currentStepIndex: nextIndex });
-    setIsExecutingMove(false);
+    setIsExecutingSingleMove(false);
 
     if (nextIndex >= totalSteps) {
       store.setState({ isTutorFinished: true });
     }
-  }, [engine, isExecutingMove, currentStepIndex, totalSteps, solutionMoves, playbackSpeed]);
+  }, [engine, isExecutingSingleMove, currentStepIndex, totalSteps, solutionMoves, stopPlayback]);
 
-  // Handle Step Backward
+  // 6. Handle Step Backward
   const handlePrevStep = useCallback(() => {
-    if (!engine || isExecutingMove || currentStepIndex <= 0) return;
+    if (!engine || isExecutingSingleMove || currentStepIndex <= 0) return;
+    stopPlayback();
 
     const prevIndex = currentStepIndex - 1;
     const targetFacelets = historyFacelets[prevIndex];
@@ -85,30 +180,31 @@ export const TutorControlPanel: React.FC<TutorControlPanelProps> = ({
       currentStepIndex: prevIndex,
       isTutorFinished: false,
     });
-  }, [engine, isExecutingMove, currentStepIndex, historyFacelets]);
+  }, [engine, isExecutingSingleMove, currentStepIndex, historyFacelets, stopPlayback]);
 
-  // Handle Replay Current Step
+  // 7. Handle Replay Current Step
   const handleReplayCurrentStep = useCallback(async () => {
-    if (!engine || isExecutingMove || currentStepIndex >= totalSteps) return;
+    if (!engine || isExecutingSingleMove || currentStepIndex >= totalSteps) return;
+    stopPlayback();
 
-    setIsExecutingMove(true);
+    setIsExecutingSingleMove(true);
     engine.hideTutorGuide();
 
-    // 1. Reset state to pre-step
+    // Reset state to pre-step
     const preFacelets = historyFacelets[currentStepIndex];
     engine.setStateFromFacelets(preFacelets);
 
-    // 2. Slow demonstration
+    // Slow demonstration
     const move = solutionMoves[currentStepIndex];
-    await engine.applyMove(move, 0.5);
+    await engine.playMoveAsync(move, 600);
 
-    // 3. Re-show guide
-    setIsExecutingMove(false);
-  }, [engine, isExecutingMove, currentStepIndex, totalSteps, historyFacelets, solutionMoves]);
+    setIsExecutingSingleMove(false);
+  }, [engine, isExecutingSingleMove, currentStepIndex, totalSteps, historyFacelets, solutionMoves, stopPlayback]);
 
-  // Handle Jump directly to any step
+  // 8. Handle Jump directly to any step
   const handleJumpToStep = (index: number) => {
-    if (!engine || isExecutingMove || index < 0 || index > totalSteps) return;
+    if (!engine || isExecutingSingleMove || index < 0 || index > totalSteps) return;
+    stopPlayback();
 
     const targetFacelets = historyFacelets[index];
     engine.setStateFromFacelets(targetFacelets);
@@ -118,33 +214,15 @@ export const TutorControlPanel: React.FC<TutorControlPanelProps> = ({
     });
   };
 
-  // Auto Play Loop
-  useEffect(() => {
-    if (!isAutoPlay || isExecutingMove || isTutorFinished || currentStepIndex >= totalSteps) {
-      if (autoPlayTimerRef.current) {
-        clearTimeout(autoPlayTimerRef.current);
-        autoPlayTimerRef.current = null;
-      }
-      return;
-    }
-
-    autoPlayTimerRef.current = setTimeout(() => {
-      handleNextStep();
-    }, autoPlayInterval);
-
-    return () => {
-      if (autoPlayTimerRef.current) {
-        clearTimeout(autoPlayTimerRef.current);
-      }
-    };
-  }, [isAutoPlay, isExecutingMove, isTutorFinished, currentStepIndex, totalSteps, autoPlayInterval, handleNextStep]);
-
-  // Keyboard Navigation
+  // 9. Keyboard Navigation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) return;
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement).tagName)) return;
 
-      if (e.code === 'Space' || e.code === 'ArrowRight') {
+      if (e.code === 'Space') {
+        e.preventDefault();
+        handleTogglePlay('continuous');
+      } else if (e.code === 'ArrowRight') {
         e.preventDefault();
         handleNextStep();
       } else if (e.code === 'ArrowLeft') {
@@ -158,19 +236,28 @@ export const TutorControlPanel: React.FC<TutorControlPanelProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleNextStep, handlePrevStep, handleReplayCurrentStep]);
+  }, [handleNextStep, handlePrevStep, handleReplayCurrentStep, isPlaying, activePlayType]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      playSessionIdRef.current++;
+      isPlayingRef.current = false;
+      engine?.cancelAnimations();
+    };
+  }, [engine]);
 
   return (
     <>
-      <div className="flex flex-col gap-3 glass-panel rounded-3xl p-4 sm:p-5 shadow-2xl border border-sky-500/25 max-w-xl w-full mx-auto select-none">
+      <div className="flex flex-col gap-3 w-full select-none">
         {/* Top Header: Step Counter & Reset Camera */}
-        <div className="flex items-center justify-between pb-3 border-b border-slate-700/50">
+        <div className="flex items-center justify-between pb-2.5 border-b border-slate-700/50">
           <div className="flex items-center gap-2">
             <span className="px-2.5 py-1 rounded-full bg-sky-500/20 text-sky-300 font-mono text-xs font-bold border border-sky-400/30">
               第 {Math.min(currentStepIndex + 1, totalSteps)} / {totalSteps} 步
             </span>
-            <span className="text-xs text-slate-400">
-              进度 {Math.round((currentStepIndex / totalSteps) * 100)}%
+            <span className="text-xs text-slate-400 font-medium">
+              剩余 {Math.max(0, totalSteps - currentStepIndex)} 步
             </span>
           </div>
 
@@ -178,8 +265,8 @@ export const TutorControlPanel: React.FC<TutorControlPanelProps> = ({
             <button
               type="button"
               onClick={() => engine?.alignCamera('HOME')}
-              className="px-2.5 py-1 rounded-lg glass-button text-xs text-sky-300 font-medium flex items-center gap-1 shadow-sm"
-              title="一键回正白顶绿前标准视角"
+              className="px-2.5 py-1 rounded-lg glass-button text-xs text-sky-300 font-medium flex items-center gap-1 shadow-sm cursor-pointer"
+              title="一键回正白顶绿前红右标准双手持视角"
             >
               <span>🧭</span>
               <span>回正视角</span>
@@ -187,8 +274,11 @@ export const TutorControlPanel: React.FC<TutorControlPanelProps> = ({
 
             <button
               type="button"
-              onClick={onExitTutor}
-              className="px-2.5 py-1 rounded-lg text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 transition-all"
+              onClick={() => {
+                stopPlayback();
+                onExitTutor();
+              }}
+              className="px-2.5 py-1 rounded-lg text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 transition-all cursor-pointer"
             >
               退出教学
             </button>
@@ -197,8 +287,8 @@ export const TutorControlPanel: React.FC<TutorControlPanelProps> = ({
 
         {/* Current Gesture Guide Card */}
         {currentInstruction && currentStepIndex < totalSteps ? (
-          <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-slate-900/90 via-slate-900/80 to-sky-950/40 p-4 border border-sky-400/30 shadow-inner">
-            <div className="flex items-start gap-4">
+          <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-slate-900/90 via-slate-900/80 to-sky-950/40 p-3.5 sm:p-4 border border-sky-400/30 shadow-inner">
+            <div className="flex items-start gap-3.5 sm:gap-4">
               {/* Giant Formula Badge */}
               <div className="w-16 h-16 sm:w-18 sm:h-18 rounded-2xl bg-gradient-to-tr from-sky-500 to-cyan-400 text-slate-950 font-black text-3xl sm:text-4xl flex items-center justify-center shadow-[0_0_20px_rgba(56,189,248,0.5)] shrink-0 font-mono">
                 {currentInstruction.move}
@@ -206,7 +296,7 @@ export const TutorControlPanel: React.FC<TutorControlPanelProps> = ({
 
               {/* Gesture Instructions */}
               <div className="flex-1 min-w-0">
-                <h3 className="text-base sm:text-lg font-bold text-white mb-1 tracking-wide">
+                <h3 className="text-sm sm:text-base font-bold text-white mb-1 tracking-wide">
                   {currentInstruction.title}
                 </h3>
                 <div className="text-xs font-semibold text-emerald-400 mb-1 flex items-center gap-1.5">
@@ -220,15 +310,15 @@ export const TutorControlPanel: React.FC<TutorControlPanelProps> = ({
             </div>
 
             {/* Visual Guide Hint */}
-            <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
+            <div className="mt-3 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
               <span className="flex items-center gap-1 text-sky-300">
-                <span>💡 提示：</span>
-                <span>请观察 3D 魔方上的发光层与弧形方向箭头，保持白顶绿前跟拧</span>
+                <span>💡 指引：</span>
+                <span>请看 3D 绿色发光外层与动态方向箭头跟随转动</span>
               </span>
             </div>
           </div>
         ) : (
-          <div className="p-6 rounded-2xl bg-slate-900/80 border border-emerald-500/30 text-center">
+          <div className="p-5 rounded-2xl bg-slate-900/80 border border-emerald-500/30 text-center">
             <div className="text-2xl mb-1">🎉</div>
             <div className="font-bold text-emerald-300 text-sm">
               所有步骤演示完毕！手中魔方已成功复原！
@@ -236,142 +326,148 @@ export const TutorControlPanel: React.FC<TutorControlPanelProps> = ({
           </div>
         )}
 
-        {/* Primary Rhythm Control Console */}
-        <div className="flex flex-col gap-2.5">
-          <div className="grid grid-cols-4 gap-2">
-            {/* Step Back Button */}
+        {/* Dual Primary Continuous / Follow-along Playback Modes */}
+        <div className="grid grid-cols-2 gap-2">
+          {/* Continuous Demo CTA */}
+          <button
+            type="button"
+            onClick={() => handleTogglePlay('continuous')}
+            className={`py-3 px-3 rounded-2xl font-bold text-xs sm:text-sm tracking-wide transition-all duration-200 flex items-center justify-center gap-2 shadow-lg cursor-pointer ${
+              isPlaying && activePlayType === 'continuous'
+                ? 'bg-amber-500 text-slate-950 ring-2 ring-amber-300 shadow-[0_0_20px_rgba(245,158,11,0.5)]'
+                : 'bg-gradient-to-r from-sky-500 via-cyan-400 to-emerald-400 text-slate-950 hover:brightness-110 hover:shadow-[0_0_20px_rgba(56,189,248,0.4)]'
+            }`}
+          >
+            <span>{isPlaying && activePlayType === 'continuous' ? '⏸ 暂停演示' : '▶ 一键动态演示通关'}</span>
+          </button>
+
+          {/* Follow-along Practice CTA */}
+          <button
+            type="button"
+            onClick={() => handleTogglePlay('followAlong')}
+            className={`py-3 px-3 rounded-2xl font-bold text-xs sm:text-sm tracking-wide transition-all duration-200 flex items-center justify-center gap-2 shadow-lg cursor-pointer ${
+              isPlaying && activePlayType === 'followAlong'
+                ? 'bg-amber-500 text-slate-950 ring-2 ring-amber-300 shadow-[0_0_20px_rgba(245,158,11,0.5)]'
+                : 'bg-slate-800 text-emerald-300 border border-emerald-500/40 hover:bg-slate-700/80'
+            }`}
+          >
+            <span>{isPlaying && activePlayType === 'followAlong' ? '⏸ 暂停跟练' : '⏱ 自动跟练模式'}</span>
+          </button>
+        </div>
+
+        {/* Secondary Stepping Controls & Speeds */}
+        <div className="flex flex-col gap-2.5 bg-slate-950/60 p-3 rounded-2xl border border-slate-800 shadow-inner">
+          {/* Step Back / Replay / Step Next row */}
+          <div className="grid grid-cols-3 gap-2">
             <button
               type="button"
               onClick={handlePrevStep}
-              disabled={currentStepIndex <= 0 || isExecutingMove}
-              className={`py-3 px-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1 glass-button ${
+              disabled={currentStepIndex <= 0 || isExecutingSingleMove}
+              className={`py-2 px-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1 glass-button ${
                 currentStepIndex <= 0
                   ? 'opacity-40 cursor-not-allowed text-slate-500'
-                  : 'text-slate-200 hover:text-white cursor-pointer'
+                  : 'text-slate-200 hover:text-white cursor-pointer active:scale-95'
               }`}
               title="回退到上一步 (快捷键 ←)"
             >
-              <span>⬅️</span>
-              <span className="hidden sm:inline">上一步</span>
+              <span>⏮ 上一步</span>
             </button>
 
-            {/* Replay Current Button */}
             <button
               type="button"
               onClick={handleReplayCurrentStep}
-              disabled={isExecutingMove || currentStepIndex >= totalSteps}
-              className={`py-3 px-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1 glass-button ${
+              disabled={isExecutingSingleMove || currentStepIndex >= totalSteps}
+              className={`py-2 px-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1 glass-button ${
                 currentStepIndex >= totalSteps
                   ? 'opacity-40 cursor-not-allowed text-slate-500'
-                  : 'text-sky-300 hover:text-sky-200 cursor-pointer'
+                  : 'text-sky-300 hover:text-sky-200 cursor-pointer active:scale-95'
               }`}
-              title="重播当前步 (快捷键 R)"
+              title="重看当前步 (快捷键 R)"
             >
-              <span>🔁</span>
-              <span className="hidden sm:inline">重播当前步</span>
+              <span>🔁 重看当前步</span>
             </button>
 
-            {/* Next Step Primary Button */}
             <button
               type="button"
               onClick={handleNextStep}
-              disabled={isExecutingMove || currentStepIndex >= totalSteps}
-              className={`col-span-2 py-3 px-4 rounded-xl text-xs sm:text-sm font-bold tracking-wider flex items-center justify-center gap-2 shadow-lg transition-all ${
+              disabled={isExecutingSingleMove || currentStepIndex >= totalSteps}
+              className={`py-2 px-2 rounded-xl text-xs font-semibold flex items-center justify-center gap-1 glass-button ${
                 currentStepIndex >= totalSteps
-                  ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
-                  : isExecutingMove
-                  ? 'bg-sky-600 text-white cursor-wait'
-                  : 'bg-gradient-to-r from-sky-500 via-cyan-400 to-emerald-400 text-slate-950 hover:brightness-110 hover:scale-[1.02] shadow-[0_0_20px_rgba(56,189,248,0.4)] cursor-pointer'
+                  ? 'opacity-40 cursor-not-allowed text-slate-500'
+                  : 'text-emerald-300 hover:text-emerald-200 cursor-pointer active:scale-95'
               }`}
+              title="单步下一步 (快捷键 →)"
             >
-              {isExecutingMove ? (
-                <>
-                  <div className="w-3.5 h-3.5 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
-                  <span>演示中...</span>
-                </>
-              ) : (
-                <>
-                  <span>演示并执行下一步</span>
-                  <span>➡️</span>
-                </>
-              )}
+              <span>单步执行 ⏭</span>
             </button>
           </div>
 
-          {/* Secondary Controls: Auto-Play & Speed Bar */}
-          <div className="flex items-center justify-between gap-2 px-1 text-xs">
-            {/* Auto Play Toggle */}
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => store.setState({ isAutoPlay: !isAutoPlay })}
-                className={`px-3 py-1.5 rounded-lg font-medium transition-all flex items-center gap-1.5 ${
-                  isAutoPlay
-                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-[0_0_10px_rgba(52,211,153,0.3)]'
-                    : 'glass-button text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <span>{isAutoPlay ? '⏸️' : '▶️'}</span>
-                <span>自动跟练</span>
-              </button>
-
-              {isAutoPlay && (
-                <div className="flex items-center gap-1 bg-slate-900/60 p-1 rounded-lg border border-slate-800 text-[11px]">
-                  {[1500, 3000, 5000].map((interval) => (
-                    <button
-                      key={interval}
-                      type="button"
-                      onClick={() => store.setState({ autoPlayInterval: interval })}
-                      className={`px-2 py-0.5 rounded ${
-                        autoPlayInterval === interval
-                          ? 'bg-sky-500/30 text-sky-200 font-bold'
-                          : 'text-slate-500 hover:text-slate-300'
-                      }`}
-                    >
-                      {interval / 1000}s
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Playback Speed Selector */}
-            <div className="flex items-center gap-1 bg-slate-900/60 p-1 rounded-lg border border-slate-800 text-[11px]">
-              <span className="text-slate-500 px-1">速度:</span>
+          {/* 4-Speed Settings & Follow-along Interval */}
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800/80 text-xs">
+            {/* Speed Selector (4 speeds: 0.5x, 1x, 2x, 4x) */}
+            <div className="flex items-center gap-1">
+              <span className="text-slate-400 text-[11px]">倍速:</span>
               {[
-                { label: '慢速 0.5x', speed: 0.5 },
-                { label: '标准 1x', speed: 1.0 },
-                { label: '快速 2x', speed: 2.0 },
+                { label: '0.5x', speed: 0.5 },
+                { label: '1x', speed: 1.0 },
+                { label: '2x', speed: 2.0 },
+                { label: '4x', speed: 4.0 },
               ].map((s) => (
                 <button
                   key={s.speed}
                   type="button"
                   onClick={() => store.setState({ playbackSpeed: s.speed })}
-                  className={`px-2 py-0.5 rounded transition-all ${
+                  className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-all cursor-pointer ${
                     playbackSpeed === s.speed
-                      ? 'bg-sky-500/30 text-sky-200 font-bold'
-                      : 'text-slate-400 hover:text-slate-200'
+                      ? 'bg-sky-500 text-slate-950 font-bold shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
                   }`}
                 >
                   {s.label}
                 </button>
               ))}
             </div>
+
+            {/* Follow-along interval selector (1.5s, 3s, 5s) */}
+            <div className="flex items-center gap-1">
+              <span className="text-slate-400 text-[11px]">跟练停顿:</span>
+              {[
+                { label: '1.5s', ms: 1500 },
+                { label: '3s', ms: 3000 },
+                { label: '5s', ms: 5000 },
+              ].map((item) => (
+                <button
+                  key={item.ms}
+                  type="button"
+                  onClick={() => store.setState({ autoPlayInterval: item.ms })}
+                  className={`px-1.5 py-0.5 rounded text-[11px] font-semibold transition-all cursor-pointer ${
+                    autoPlayInterval === item.ms
+                      ? 'bg-emerald-500 text-slate-950 font-bold shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
-        {/* Horizontal Step Timeline Capsule */}
+        {/* Step Capsules Timeline (Auto-scrolls to center on every move) */}
         <div className="pt-2 border-t border-slate-800/80">
           <div className="text-[11px] font-medium text-slate-400 mb-1.5 flex items-center justify-between">
-            <span>解法步骤胶囊条：</span>
-            <span className="text-slate-500 font-mono">
-              点击任意步骤快速跳转
+            <span className="flex items-center gap-1">
+              <span>解法步骤胶囊条：</span>
+              <span className="text-sky-300 font-mono">共 {totalSteps} 步</span>
+            </span>
+            <span className="text-slate-500 font-sans text-[10px]">
+              点击任意胶囊快速跳转
             </span>
           </div>
 
           <div
             ref={timelineScrollRef}
-            className="flex items-center gap-1.5 overflow-x-auto pb-1.5 scroll-smooth"
+            className="flex items-center gap-1.5 overflow-x-auto pb-1.5 scroll-smooth no-scrollbar"
           >
             {instructions.map((inst, idx) => {
               const isPast = idx < currentStepIndex;
@@ -380,16 +476,18 @@ export const TutorControlPanel: React.FC<TutorControlPanelProps> = ({
               return (
                 <button
                   key={idx}
+                  ref={(el) => (capsuleRefs.current[idx] = el)}
                   type="button"
                   onClick={() => handleJumpToStep(idx)}
-                  className={`px-3 py-1.5 rounded-xl font-mono text-xs font-bold shrink-0 transition-all duration-200 flex items-center gap-1 ${
+                  className={`px-3 py-1.5 rounded-xl font-mono text-xs font-bold shrink-0 transition-all duration-200 flex items-center gap-1 cursor-pointer ${
                     isCurrent
-                      ? 'bg-sky-500 text-slate-950 ring-2 ring-sky-300 scale-105 shadow-[0_0_15px_rgba(56,189,248,0.6)]'
+                      ? 'bg-gradient-to-r from-sky-400 to-cyan-400 text-slate-950 ring-2 ring-sky-300 scale-105 shadow-[0_0_15px_rgba(56,189,248,0.7)] font-black'
                       : isPast
                       ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
                       : 'bg-slate-900 text-slate-400 hover:bg-slate-800 hover:text-slate-200 border border-slate-800'
                   }`}
                 >
+                  <span className="text-[10px] opacity-70 font-sans">{idx + 1}.</span>
                   <span>{inst.move}</span>
                   {isPast && <span className="text-[10px] text-emerald-400 font-sans">✓</span>}
                 </button>

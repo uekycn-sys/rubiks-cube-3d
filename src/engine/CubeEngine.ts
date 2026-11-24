@@ -71,9 +71,11 @@ export class CubeEngine {
   // Callbacks
   public callbacks: CubeEngineCallbacks = {};
 
-  // Lifecycle
+  // Lifecycle & Animation Safety Guard
   private animFrameId: number | null = null;
   private resizeObserver: ResizeObserver | null = null;
+  private currentMoveRafId: number | null = null;
+  private currentMoveResolver: (() => void) | null = null;
 
   constructor(callbacks: CubeEngineCallbacks = {}) {
     this.callbacks = callbacks;
@@ -88,8 +90,8 @@ export class CubeEngine {
     this.scene = new THREE.Scene();
 
     // 2. Camera
-    this.camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
-    this.camera.position.set(3.8, 3.4, 5.0); // Isometric Oblique Home
+    this.camera = new THREE.PerspectiveCamera(44, width / height, 0.1, 100);
+    this.camera.position.set(3.6, 3.2, 5.8); // Calibrated 3/4 handheld view: White top, Green front-left, Red right
     this.camera.lookAt(0, 0, 0);
 
     // 3. Renderer
@@ -347,19 +349,54 @@ export class CubeEngine {
   }
 
   /**
-   * Applies a single Singmaster move with smooth animation and mathematical guard rails
+   * Immediately finishes or cancels any active rotation, restoring pivot and snapping all cubies cleanly.
+   * Guarantees 0 orphaned cubies in pivot, 0 floating rotation drift.
    */
-  public async applyMove(move: Move, speedFactor = 1.0): Promise<void> {
+  public cancelAnimations(): void {
+    if (this.currentMoveRafId !== null) {
+      cancelAnimationFrame(this.currentMoveRafId);
+      this.currentMoveRafId = null;
+    }
+
+    // If cubies are attached to pivot, re-attach to cubeRoot with snapped coordinates
+    if (this.pivot.children.length > 0) {
+      while (this.pivot.children.length > 0) {
+        const cubie = this.pivot.children[0] as THREE.Mesh;
+        this.cubeRoot.attach(cubie);
+        cubie.position.x = Math.round(cubie.position.x);
+        cubie.position.y = Math.round(cubie.position.y);
+        cubie.position.z = Math.round(cubie.position.z);
+        this.snapRotationToOrthogonal(cubie);
+        cubie.updateMatrix();
+        cubie.updateMatrixWorld();
+      }
+    }
+    this.pivot.rotation.set(0, 0, 0);
+    this.pivot.updateMatrixWorld();
+
+    this.moveQueue = [];
+    this.isAnimating = false;
+
+    if (this.currentMoveResolver) {
+      const resolve = this.currentMoveResolver;
+      this.currentMoveResolver = null;
+      resolve();
+    }
+  }
+
+  /**
+   * Reliable async move execution:
+   * Plays a smooth 3D layer rotation with guaranteed duration and snaps upon landing before resolving.
+   */
+  public async playMoveAsync(move: Move, durationMs = 350): Promise<void> {
+    // If an animation is already in progress, safely finish/cancel it first
     if (this.isAnimating) {
-      // If already animating, queue it
-      this.moveQueue.push(move);
-      return;
+      this.cancelAnimations();
     }
 
     this.isAnimating = true;
-    const duration = Math.max(100, this.baseTurnDuration / speedFactor);
 
-    await this.executeMoveAnimation(move, duration);
+    await this.executeMoveAnimation(move, Math.max(60, durationMs));
 
     // Update logical cube state
     this.cubeState.applyMove(move);
@@ -371,6 +408,20 @@ export class CubeEngine {
 
     // Trigger move complete callback
     this.callbacks.onMoveComplete?.(move, this.moveQueue.length);
+  }
+
+  /**
+   * Applies a single Singmaster move with smooth animation and mathematical guard rails
+   */
+  public async applyMove(move: Move, speedFactor = 1.0): Promise<void> {
+    if (this.isAnimating) {
+      // If already animating, queue it
+      this.moveQueue.push(move);
+      return;
+    }
+
+    const duration = Math.max(80, Math.round(this.baseTurnDuration / speedFactor));
+    await this.playMoveAsync(move, duration);
 
     // Process next queued move if any
     if (this.moveQueue.length > 0) {
@@ -399,6 +450,8 @@ export class CubeEngine {
    */
   private executeMoveAnimation(move: Move, duration: number): Promise<void> {
     return new Promise((resolve) => {
+      this.currentMoveResolver = resolve;
+
       const face = move[0] as Face;
       const isCCW = move.includes("'");
       const isDouble = move.includes('2');
@@ -480,8 +533,9 @@ export class CubeEngine {
         if (axis === 'z') this.pivot.rotation.z = angle * ease;
 
         if (progress < 1.0) {
-          requestAnimationFrame(animateStep);
+          this.currentMoveRafId = requestAnimationFrame(animateStep);
         } else {
+          this.currentMoveRafId = null;
           // 5. Finalize rotation: re-attach to cubeRoot, round position to {-1,0,1}, snap orthogonal
           if (axis === 'x') this.pivot.rotation.x = angle;
           if (axis === 'y') this.pivot.rotation.y = angle;
@@ -500,11 +554,17 @@ export class CubeEngine {
             cubie.updateMatrixWorld();
           }
 
+          this.pivot.rotation.set(0, 0, 0);
+          this.pivot.updateMatrixWorld();
+
+          if (this.currentMoveResolver === resolve) {
+            this.currentMoveResolver = null;
+          }
           resolve();
         }
       };
 
-      requestAnimationFrame(animateStep);
+      this.currentMoveRafId = requestAnimationFrame(animateStep);
     });
   }
 
@@ -547,11 +607,11 @@ export class CubeEngine {
    */
   public alignCamera(view: CameraViewPreset): void {
     const targetPos = new THREE.Vector3();
-    const distance = 6.2;
+    const distance = 6.8;
 
     switch (view) {
       case 'HOME':
-        targetPos.set(3.8, 3.4, 5.0);
+        targetPos.set(3.6, 3.2, 5.8);
         break;
       case 'TOP': // U (+Y)
         targetPos.set(0.001, distance, 0.001);
@@ -713,7 +773,7 @@ export class CubeEngine {
     }
   }
 
-  private handleResize(): void {
+  public handleResize(): void {
     if (!this.container || !this.renderer || !this.camera) return;
     const width = this.container.clientWidth;
     const height = this.container.clientHeight;
@@ -744,17 +804,30 @@ export class CubeEngine {
       this.controls.update();
     }
 
-    // Tutor arrow subtle pulse
+    // Tutor arrow & highlight box breathing pulse
     if (this.tutorGroup.children.length > 0) {
-      const time = performance.now() * 0.003;
-      const scale = 1.0 + Math.sin(time) * 0.03;
+      const time = performance.now() * 0.0035;
+      const pulse = Math.sin(time);
+      const scale = 1.0 + pulse * 0.02;
       this.tutorGroup.scale.set(scale, scale, scale);
+
+      // Pulse emissive glow of arrows
+      this.tutorGroup.traverse((child) => {
+        if ((child as THREE.Mesh).isMesh) {
+          const mesh = child as THREE.Mesh;
+          const mat = mesh.material as THREE.MeshStandardMaterial;
+          if (mat && mat.emissiveIntensity !== undefined) {
+            mat.emissiveIntensity = 1.2 + pulse * 0.35;
+          }
+        }
+      });
     }
 
     this.renderer.render(this.scene, this.camera);
   };
 
   public destroy(): void {
+    this.cancelAnimations();
     if (this.animFrameId) cancelAnimationFrame(this.animFrameId);
     if (this.resizeObserver) this.resizeObserver.disconnect();
     this.controls.dispose();

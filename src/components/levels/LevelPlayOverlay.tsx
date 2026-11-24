@@ -27,9 +27,11 @@ export const LevelPlayOverlay: React.FC<LevelPlayOverlayProps> = ({
   const [isVictory, setIsVictory] = useState(false);
   const [isFailed, setIsFailed] = useState(false);
   const [earnedStars, setEarnedStars] = useState(0);
+  const [isAiDemoRunning, setIsAiDemoRunning] = useState(false);
 
   const startTimeRef = useRef(performance.now());
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const aiDemoSessionRef = useRef(0);
 
   // Victory Handler
   const handleVictory = useCallback(() => {
@@ -71,6 +73,10 @@ export const LevelPlayOverlay: React.FC<LevelPlayOverlayProps> = ({
   // Load level and apply scramble
   const loadLevelScramble = useCallback(() => {
     if (!engine) return;
+    aiDemoSessionRef.current++;
+    setIsAiDemoRunning(false);
+    engine.cancelAnimations();
+    engine.hideTutorGuide();
 
     engine.setStateFromFacelets('UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB');
     for (const m of level.scramble) {
@@ -171,6 +177,10 @@ export const LevelPlayOverlay: React.FC<LevelPlayOverlayProps> = ({
   // Switch to AI Tutor Mode for this level
   const handleSwitchToAiTutor = async () => {
     if (!engine) return;
+    aiDemoSessionRef.current++;
+    setIsAiDemoRunning(false);
+    engine.cancelAnimations();
+
     const facelets = engine.getFacelets();
     try {
       const solution = await solveCube(facelets);
@@ -181,11 +191,60 @@ export const LevelPlayOverlay: React.FC<LevelPlayOverlayProps> = ({
     }
   };
 
+  // AI Dynamic Demo to complete this level automatically
+  const handleToggleAiDemo = async () => {
+    if (!engine || isVictory) return;
+
+    if (isAiDemoRunning) {
+      aiDemoSessionRef.current++;
+      setIsAiDemoRunning(false);
+      engine.cancelAnimations();
+      engine.hideTutorGuide();
+      setAiHint(null);
+      return;
+    }
+
+    const sessionId = ++aiDemoSessionRef.current;
+    setIsAiDemoRunning(true);
+    setAiHint('AI 正在全自动慢速演示本关通关解法...');
+
+    try {
+      const facelets = engine.getFacelets();
+      const solution = await solveCube(facelets);
+
+      for (let i = 0; i < solution.length; i++) {
+        if (aiDemoSessionRef.current !== sessionId) break;
+        const move = solution[i];
+        engine.showTutorGuide(move);
+
+        await engine.playMoveAsync(move, 320);
+
+        if (aiDemoSessionRef.current !== sessionId) break;
+        await new Promise((r) => setTimeout(r, 120));
+      }
+    } catch (err) {
+      console.error('AI demo error:', err);
+    } finally {
+      engine.hideTutorGuide();
+      if (aiDemoSessionRef.current === sessionId) {
+        setIsAiDemoRunning(false);
+      }
+    }
+  };
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      aiDemoSessionRef.current++;
+      engine?.cancelAnimations();
+    };
+  }, [engine]);
+
   return (
     <>
-      {/* Top Level Info HUD */}
-      <div className="absolute top-20 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center gap-2 max-w-xl w-full px-4 pointer-events-auto select-none">
-        <div className="w-full glass-panel rounded-2xl p-3 sm:p-4 shadow-2xl border border-sky-500/25 flex flex-col gap-2">
+      {/* Level Info & Controls */}
+      <div className="flex flex-col gap-3 w-full select-none">
+        <div className="w-full rounded-2xl bg-slate-900/80 border border-sky-500/25 p-3.5 sm:p-4 shadow-xl flex flex-col gap-2.5">
           {/* Top Line: Title & Counters */}
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -242,44 +301,60 @@ export const LevelPlayOverlay: React.FC<LevelPlayOverlayProps> = ({
           )}
 
           {/* Action Tools */}
-          <div className="flex items-center justify-between pt-2 border-t border-slate-700/60 text-xs">
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={handleGetAiHint}
-                disabled={isAiThinking}
-                className="px-2.5 py-1 rounded-lg glass-button text-sky-300 hover:text-white flex items-center gap-1 text-xs"
-              >
-                <span>💡</span>
-                <span>{isAiThinking ? '思考中...' : 'AI 提示下一步'}</span>
-              </button>
+          <div className="flex flex-col gap-2 pt-2 border-t border-slate-700/60 text-xs">
+            {/* AI Dynamic Demo CTA */}
+            <button
+              type="button"
+              onClick={handleToggleAiDemo}
+              className={`w-full py-2.5 px-3 rounded-xl font-bold text-xs tracking-wide transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md ${
+                isAiDemoRunning
+                  ? 'bg-amber-500 text-slate-950 ring-2 ring-amber-300 shadow-[0_0_15px_rgba(245,158,11,0.5)]'
+                  : 'bg-gradient-to-r from-sky-500 via-cyan-400 to-emerald-400 text-slate-950 hover:brightness-110 shadow-[0_0_15px_rgba(56,189,248,0.3)]'
+              }`}
+            >
+              <span>{isAiDemoRunning ? '⏸ 暂停 AI 演示' : '▶ AI 动态演示通关本关'}</span>
+            </button>
 
-              <button
-                type="button"
-                onClick={handleSwitchToAiTutor}
-                className="px-2.5 py-1 rounded-lg glass-button text-emerald-300 hover:text-white flex items-center gap-1 text-xs"
-              >
-                <span>🎓</span>
-                <span>切换 AI 教学</span>
-              </button>
-            </div>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleGetAiHint}
+                  disabled={isAiThinking || isAiDemoRunning}
+                  className="px-2.5 py-1 rounded-lg glass-button text-sky-300 hover:text-white flex items-center gap-1 text-xs cursor-pointer"
+                >
+                  <span>💡</span>
+                  <span>{isAiThinking ? '思考中...' : 'AI 提示'}</span>
+                </button>
 
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={loadLevelScramble}
-                className="px-2.5 py-1 rounded-lg glass-button text-slate-300 hover:text-white text-xs"
-              >
-                🔁 重置本关
-              </button>
+                <button
+                  type="button"
+                  onClick={handleSwitchToAiTutor}
+                  disabled={isAiDemoRunning}
+                  className="px-2.5 py-1 rounded-lg glass-button text-emerald-300 hover:text-white flex items-center gap-1 text-xs cursor-pointer"
+                >
+                  <span>🎓</span>
+                  <span>AI 手把手教学</span>
+                </button>
+              </div>
 
-              <button
-                type="button"
-                onClick={onExitLevels}
-                className="px-2.5 py-1 rounded-lg text-slate-400 hover:text-slate-200 text-xs"
-              >
-                关卡列表 📋
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={loadLevelScramble}
+                  className="px-2.5 py-1 rounded-lg glass-button text-slate-300 hover:text-white text-xs cursor-pointer"
+                >
+                  🔁 重置
+                </button>
+
+                <button
+                  type="button"
+                  onClick={onExitLevels}
+                  className="px-2.5 py-1 rounded-lg text-slate-400 hover:text-slate-200 text-xs cursor-pointer"
+                >
+                  关卡列表 📋
+                </button>
+              </div>
             </div>
           </div>
         </div>

@@ -11,6 +11,7 @@ import { LevelPlayOverlay } from './components/levels/LevelPlayOverlay';
 import { SpeedrunPanel } from './components/speedrun/SpeedrunPanel';
 import { QuickTurnBar } from './components/common/QuickTurnBar';
 import { LevelConfig, LEVELS } from './data/levels';
+import { soundManager } from './audio/SoundManager';
 
 export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -27,6 +28,7 @@ export default function App() {
 
   const [activeLevel, setActiveLevel] = useState<LevelConfig | null>(LEVELS[0]);
   const [showLevelSelect, setShowLevelSelect] = useState(false);
+  const [isMuted, setIsMuted] = useState(soundManager.getMuted());
 
   // 1. Initialize 3D CubeEngine
   useEffect(() => {
@@ -91,7 +93,7 @@ export default function App() {
   // 5. Global Keyboard Shortcuts in Free/Game Mode (U/D/L/R/F/B)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) return;
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement).tagName)) return;
       if (mode === 'paint' || mode === 'tutor') return; // Handled by respective modes
 
       const key = e.key.toUpperCase();
@@ -120,157 +122,222 @@ export default function App() {
     }
   };
 
+  const handleToggleMute = () => {
+    const nextMuted = soundManager.toggleMute();
+    setIsMuted(nextMuted);
+  };
+
   return (
-    <div className="relative w-screen h-screen overflow-hidden bg-gradient-to-br from-[#0B1020] via-[#0F172A] to-[#131B2E]">
-      {/* 3D WebGL Canvas Layer */}
-      <div ref={containerRef} className="w-full h-full cursor-grab active:cursor-grabbing" />
+    <div className="relative w-screen h-screen overflow-hidden flex flex-col bg-[#0B1020]">
+      {/* Top Fixed Master Navigation Bar (h-14) */}
+      <header className="h-14 w-full border-b border-white/10 bg-slate-950/80 backdrop-blur-xl px-3 sm:px-6 flex items-center justify-between shrink-0 z-30 select-none">
+        {/* Left: Brand Logo & 4 Mode Tabs */}
+        <div className="flex items-center gap-2 sm:gap-4 overflow-x-auto no-scrollbar py-1">
+          {/* Brand Logo */}
+          <div className="flex items-center gap-2 pr-2 sm:pr-3 border-r border-slate-700/60 shrink-0">
+            <div className="w-3.5 h-3.5 rounded bg-sky-400 shadow-[0_0_12px_rgba(56,189,248,0.8)]" />
+            <span className="text-xs sm:text-sm font-extrabold tracking-wide text-white whitespace-nowrap">
+              3D 魔方大师
+            </span>
+          </div>
 
-      {/* Top Floating Master Navigation Bar */}
-      <header className="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 sm:gap-3 px-4 sm:px-6 py-2 rounded-full glass-panel shadow-2xl max-w-[95vw] overflow-x-auto">
-        {/* App Title */}
-        <div className="flex items-center gap-2 pr-2 border-r border-slate-700/60 shrink-0">
-          <div className="w-3.5 h-3.5 rounded bg-sky-400 shadow-[0_0_12px_rgba(56,189,248,0.8)]" />
-          <span className="text-xs sm:text-sm font-extrabold tracking-wide text-white whitespace-nowrap">
-            3D 魔方大师
-          </span>
-        </div>
-
-        {/* Core Mode Switcher Tabs */}
-        <nav className="flex items-center gap-1 shrink-0">
-          <button
-            type="button"
-            onClick={() => store.setState({ mode: 'paint' })}
-            className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
-              mode === 'paint'
-                ? 'bg-gradient-to-r from-sky-500 to-cyan-400 text-slate-950 shadow-[0_0_15px_rgba(56,189,248,0.5)] font-bold'
-                : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
-            }`}
-          >
-            <span>📸</span>
-            <span>实景录入魔方</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              if (solutionMoves.length > 0) {
-                store.setState({ mode: 'tutor' });
-              } else {
-                store.setState({ mode: 'paint' });
-              }
-            }}
-            className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
-              mode === 'tutor'
-                ? 'bg-gradient-to-r from-cyan-400 to-emerald-400 text-slate-950 shadow-[0_0_15px_rgba(52,211,153,0.5)] font-bold'
-                : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
-            }`}
-          >
-            <span>✨</span>
-            <span>AI 手把手教学</span>
-            {solutionMoves.length > 0 && (
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-            )}
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              setShowLevelSelect(true);
-            }}
-            className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
-              mode === 'level'
-                ? 'bg-gradient-to-r from-amber-400 to-yellow-300 text-slate-950 shadow-[0_0_15px_rgba(251,191,36,0.5)] font-bold'
-                : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
-            }`}
-          >
-            <span>🏆</span>
-            <span>20关闯关</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => store.setState({ mode: 'free' })}
-            className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
-              mode === 'free'
-                ? 'bg-slate-700 text-sky-300 border border-sky-400/40 shadow-md'
-                : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
-            }`}
-          >
-            <span>🎲</span>
-            <span>随机竞速</span>
-          </button>
-        </nav>
-
-        {/* Theme Dropdown / Pill */}
-        <div className="hidden lg:flex items-center gap-1 pl-2 border-l border-slate-700/60 text-xs shrink-0">
-          {(Object.keys(THEME_PALETTES) as ColorTheme[]).map((themeKey) => (
+          {/* 4 Mode Tabs */}
+          <nav className="flex items-center gap-1 sm:gap-1.5 shrink-0">
             <button
-              key={themeKey}
               type="button"
-              onClick={() => store.setState({ theme: themeKey })}
-              className={`px-2 py-0.5 rounded text-[11px] transition-all cursor-pointer whitespace-nowrap ${
-                theme === themeKey
-                  ? 'bg-sky-500/20 text-sky-300 border border-sky-400/30 font-bold'
-                  : 'text-slate-400 hover:text-slate-200'
+              onClick={() => store.setState({ mode: 'paint' })}
+              className={`px-2.5 sm:px-3 py-1.5 rounded-full text-xs font-semibold transition-all flex items-center gap-1 cursor-pointer whitespace-nowrap ${
+                mode === 'paint'
+                  ? 'bg-gradient-to-r from-sky-500 to-cyan-400 text-slate-950 shadow-[0_0_15px_rgba(56,189,248,0.5)] font-bold'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
               }`}
             >
-              {THEME_PALETTES[themeKey].name}
+              <span>📸</span>
+              <span>实景录入</span>
             </button>
-          ))}
+
+            <button
+              type="button"
+              onClick={() => {
+                if (solutionMoves.length > 0) {
+                  store.setState({ mode: 'tutor' });
+                } else {
+                  store.setState({ mode: 'paint' });
+                }
+              }}
+              className={`px-2.5 sm:px-3 py-1.5 rounded-full text-xs font-semibold transition-all flex items-center gap-1 cursor-pointer whitespace-nowrap ${
+                mode === 'tutor'
+                  ? 'bg-gradient-to-r from-cyan-400 to-emerald-400 text-slate-950 shadow-[0_0_15px_rgba(52,211,153,0.5)] font-bold'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
+              }`}
+            >
+              <span>✨</span>
+              <span>AI 教学</span>
+              {solutionMoves.length > 0 && (
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setShowLevelSelect(true);
+              }}
+              className={`px-2.5 sm:px-3 py-1.5 rounded-full text-xs font-semibold transition-all flex items-center gap-1 cursor-pointer whitespace-nowrap ${
+                mode === 'level'
+                  ? 'bg-gradient-to-r from-amber-400 to-yellow-300 text-slate-950 shadow-[0_0_15px_rgba(251,191,36,0.5)] font-bold'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
+              }`}
+            >
+              <span>🏆</span>
+              <span>20关闯关</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => store.setState({ mode: 'free' })}
+              className={`px-2.5 sm:px-3 py-1.5 rounded-full text-xs font-semibold transition-all flex items-center gap-1 cursor-pointer whitespace-nowrap ${
+                mode === 'free'
+                  ? 'bg-slate-700 text-sky-300 border border-sky-400/40 shadow-md font-bold'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
+              }`}
+            >
+              <span>🎲</span>
+              <span>随机竞速</span>
+            </button>
+          </nav>
+        </div>
+
+        {/* Right: Theme Selector Dropdown + Sound Toggle Button */}
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+          {/* Theme Dropdown */}
+          <div className="flex items-center gap-1.5 bg-slate-900/80 border border-slate-700/60 rounded-xl px-2.5 py-1 text-xs">
+            <span className="text-slate-400 text-xs">🎨</span>
+            <select
+              value={theme}
+              onChange={(e) => store.setState({ theme: e.target.value as ColorTheme })}
+              className="bg-transparent text-slate-200 text-xs font-medium focus:outline-none cursor-pointer"
+            >
+              {(Object.keys(THEME_PALETTES) as ColorTheme[]).map((themeKey) => (
+                <option key={themeKey} value={themeKey} className="bg-slate-900 text-white">
+                  {THEME_PALETTES[themeKey].name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Sound Toggle Button */}
+          <button
+            type="button"
+            onClick={handleToggleMute}
+            className="w-8 h-8 rounded-xl border border-slate-700/60 bg-slate-900/80 hover:bg-slate-800 text-slate-300 hover:text-white transition-all text-sm flex items-center justify-center cursor-pointer shadow-sm active:scale-95"
+            title={isMuted ? '点击开启音效' : '点击静音'}
+          >
+            {isMuted ? '🔇' : '🔊'}
+          </button>
         </div>
       </header>
 
-      {/* MODE 1: Real-Cube Paint Panel Overlay */}
-      {mode === 'paint' && (
-        <aside className="absolute top-20 right-4 sm:right-6 bottom-6 z-20 w-full max-w-md sm:max-w-lg flex flex-col pointer-events-auto">
-          <RealCubePaintPanel
-            onAlignCamera={(view) => engineRef.current?.alignCamera(view)}
-            onEnterTutor={() => {
-              store.setState({ mode: 'tutor' });
-            }}
-          />
+      {/* Main Dual-Column Non-Overlapping Layout (h-[calc(100vh-3.5rem)]) */}
+      <main className="h-[calc(100vh-3.5rem)] flex flex-col lg:flex-row overflow-hidden w-full relative">
+        {/* Left Side: Dedicated 3D Rubik's Cube Stage */}
+        <section className="flex-1 relative min-h-0 h-[48vh] lg:h-full w-full overflow-hidden bg-gradient-to-br from-[#0B1020] via-[#0F172A] to-[#131B2E]">
+          {/* 3D WebGL Canvas Layer */}
+          <div ref={containerRef} className="w-full h-full cursor-grab active:cursor-grabbing" />
+
+          {/* Floating Top-Left: Mode Status Capsule */}
+          <div className="absolute top-3.5 left-4 z-20 pointer-events-none select-none">
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-900/80 backdrop-blur-md border border-white/10 text-xs shadow-lg">
+              <span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse" />
+              <span className="text-slate-200 font-medium">
+                {mode === 'paint' && '📸 实景魔方录入：点击小格上色'}
+                {mode === 'tutor' && '✨ AI 手把手教学：分步慢速指导'}
+                {mode === 'level' && `🏆 闯关模式：第 ${activeLevel?.id || 1} 关`}
+                {mode === 'free' && '🎲 随机竞速：自由打乱与计时'}
+              </span>
+            </div>
+          </div>
+
+          {/* Floating Top-Right: Align Camera & Handheld Orientation Legend */}
+          <div className="absolute top-3.5 right-4 z-20 flex flex-wrap items-center justify-end gap-2 select-none pointer-events-auto">
+            {/* Handheld Orientation Legend */}
+            <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-900/85 backdrop-blur-md border border-white/10 text-[11px] shadow-lg">
+              <span className="text-slate-400 font-medium">基准:</span>
+              <span className="flex items-center gap-1 font-semibold text-white">
+                <span className="w-2 h-2 rounded-full bg-white border border-slate-400 shadow-sm" />
+                <span>顶白</span>
+              </span>
+              <span className="text-slate-600">·</span>
+              <span className="flex items-center gap-1 font-semibold text-emerald-400">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-sm" />
+                <span>前绿</span>
+              </span>
+              <span className="text-slate-600">·</span>
+              <span className="flex items-center gap-1 font-semibold text-rose-400">
+                <span className="w-2 h-2 rounded-full bg-rose-500 shadow-sm" />
+                <span>右红</span>
+              </span>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => engineRef.current?.alignCamera('HOME')}
+              className="px-3 py-1.5 rounded-full glass-panel border border-sky-400/30 text-sky-300 hover:text-white text-xs font-semibold shadow-lg transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
+              title="一键将视角回正为白顶绿前红右标准双手持视角"
+            >
+              <span>🧭</span>
+              <span>回正视角</span>
+            </button>
+          </div>
+
+          {/* Floating Bottom: Collapsible Quick Turn Bar */}
+          <div className="absolute bottom-3 left-4 z-20 pointer-events-auto">
+            <QuickTurnBar engine={engineRef.current} />
+          </div>
+        </section>
+
+        {/* Right Side: Dedicated Non-Overlapping Work Control Panel */}
+        <aside className="w-full lg:w-[410px] xl:w-[440px] shrink-0 h-[52vh] lg:h-full overflow-y-auto border-t lg:border-t-0 lg:border-l border-white/10 bg-slate-900/80 backdrop-blur-xl p-4 flex flex-col">
+          {/* MODE 1: Real-Cube Paint Panel */}
+          {mode === 'paint' && (
+            <RealCubePaintPanel
+              onAlignCamera={(view) => engineRef.current?.alignCamera(view)}
+              onEnterTutor={() => {
+                store.setState({ mode: 'tutor' });
+              }}
+            />
+          )}
+
+          {/* MODE 2: AI Step-by-Step Tutor Control Console */}
+          {mode === 'tutor' && (
+            <TutorControlPanel
+              engine={engineRef.current}
+              onExitTutor={() => store.setState({ mode: 'free' })}
+              onGoToLevels={() => {
+                setShowLevelSelect(true);
+              }}
+            />
+          )}
+
+          {/* MODE 3: 20 Levels Mode Playing Overlay */}
+          {mode === 'level' && activeLevel && (
+            <LevelPlayOverlay
+              level={activeLevel}
+              engine={engineRef.current}
+              onExitLevels={() => setShowLevelSelect(true)}
+              onNextLevel={(next) => setActiveLevel(next)}
+            />
+          )}
+
+          {/* MODE 4: Free & Speedrun Panel */}
+          {mode === 'free' && (
+            <SpeedrunPanel
+              engine={engineRef.current}
+              onAlignCamera={(view) => engineRef.current?.alignCamera(view)}
+            />
+          )}
         </aside>
-      )}
-
-      {/* MODE 2: AI Step-by-Step Tutor Control Console Overlay */}
-      {mode === 'tutor' && (
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 w-full max-w-xl px-4 pointer-events-auto">
-          <TutorControlPanel
-            engine={engineRef.current}
-            onExitTutor={() => store.setState({ mode: 'free' })}
-            onGoToLevels={() => {
-              setShowLevelSelect(true);
-            }}
-          />
-        </div>
-      )}
-
-      {/* MODE 3: 20 Levels Mode Playing Overlay */}
-      {mode === 'level' && activeLevel && (
-        <LevelPlayOverlay
-          level={activeLevel}
-          engine={engineRef.current}
-          onExitLevels={() => setShowLevelSelect(true)}
-          onNextLevel={(next) => setActiveLevel(next)}
-        />
-      )}
-
-      {/* MODE 4: Free & Speedrun Panel Overlay */}
-      {mode === 'free' && (
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 w-full max-w-xl px-4 pointer-events-auto">
-          <SpeedrunPanel
-            engine={engineRef.current}
-            onAlignCamera={(view) => engineRef.current?.alignCamera(view)}
-          />
-        </div>
-      )}
-
-      {/* Bottom Collapsible Quick Rotator Keypad (Available in free and level modes) */}
-      {(mode === 'free' || mode === 'level') && (
-        <div className="absolute bottom-2 left-6 z-20 hidden sm:block">
-          <QuickTurnBar engine={engineRef.current} />
-        </div>
-      )}
+      </main>
 
       {/* 20 Levels Selection Modal Dialog */}
       {showLevelSelect && (

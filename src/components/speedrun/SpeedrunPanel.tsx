@@ -21,10 +21,12 @@ export const SpeedrunPanel: React.FC<SpeedrunPanelProps> = ({ engine, onAlignCam
   const [historyRecords, setHistoryRecords] = useState<number[]>([]);
   const [isMuted, setIsMuted] = useState(soundManager.getMuted());
   const [selectedPattern, setSelectedPattern] = useState<string>('');
+  const [isAiDemoRunning, setIsAiDemoRunning] = useState(false);
 
   const timerStartTimeRef = useRef(0);
   const timerRafRef = useRef<number | null>(null);
   const holdStartTimeRef = useRef(0);
+  const aiDemoSessionRef = useRef(0);
 
   // Load PB & History from localStorage
   useEffect(() => {
@@ -192,6 +194,11 @@ export const SpeedrunPanel: React.FC<SpeedrunPanelProps> = ({ engine, onAlignCam
   // Reset to solved
   const handleResetSolved = () => {
     if (!engine) return;
+    aiDemoSessionRef.current++;
+    setIsAiDemoRunning(false);
+    engine.cancelAnimations();
+    engine.hideTutorGuide();
+
     engine.setStateFromFacelets('UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB');
     setElapsedMs(0);
     setTurnCount(0);
@@ -202,6 +209,10 @@ export const SpeedrunPanel: React.FC<SpeedrunPanelProps> = ({ engine, onAlignCam
   // One-click AI Tutor call
   const handleCallAiTutor = async () => {
     if (!engine) return;
+    aiDemoSessionRef.current++;
+    setIsAiDemoRunning(false);
+    engine.cancelAnimations();
+
     const facelets = engine.getFacelets();
     try {
       const solution = await solveCube(facelets);
@@ -212,12 +223,59 @@ export const SpeedrunPanel: React.FC<SpeedrunPanelProps> = ({ engine, onAlignCam
     }
   };
 
+  // One-click AI Dynamic Demo to restore cube
+  const handleToggleAiDemo = async () => {
+    if (!engine) return;
+
+    if (isAiDemoRunning) {
+      aiDemoSessionRef.current++;
+      setIsAiDemoRunning(false);
+      engine.cancelAnimations();
+      engine.hideTutorGuide();
+      return;
+    }
+
+    const sessionId = ++aiDemoSessionRef.current;
+    setIsAiDemoRunning(true);
+
+    try {
+      const facelets = engine.getFacelets();
+      const solution = await solveCube(facelets);
+
+      for (let i = 0; i < solution.length; i++) {
+        if (aiDemoSessionRef.current !== sessionId) break;
+        const move = solution[i];
+        engine.showTutorGuide(move);
+
+        await engine.playMoveAsync(move, 280);
+
+        if (aiDemoSessionRef.current !== sessionId) break;
+        await new Promise((r) => setTimeout(r, 90));
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      engine.hideTutorGuide();
+      if (aiDemoSessionRef.current === sessionId) {
+        setIsAiDemoRunning(false);
+      }
+    }
+  };
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      aiDemoSessionRef.current++;
+      engine?.cancelAnimations();
+    };
+  }, [engine]);
+
   // Calculate live TPS
   const currentSeconds = elapsedMs / 1000;
   const tps = currentSeconds > 0 ? (turnCount / currentSeconds).toFixed(2) : '0.00';
 
   return (
-    <div className="flex flex-col gap-3 glass-panel rounded-3xl p-4 sm:p-5 shadow-2xl border border-sky-500/25 max-w-xl w-full mx-auto select-none">
+    <div className="flex flex-col gap-3 w-full select-none">
       {/* Top Header: Timer Display */}
       <div className="flex flex-col items-center justify-center p-4 rounded-2xl bg-slate-950/70 border border-slate-800 shadow-inner">
         {/* Big Timer */}
@@ -377,14 +435,29 @@ export const SpeedrunPanel: React.FC<SpeedrunPanelProps> = ({ engine, onAlignCam
           )}
         </div>
 
-        {/* One-click AI Tutor */}
-        <button
-          type="button"
-          onClick={handleCallAiTutor}
-          className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-sky-500 to-emerald-400 text-slate-950 font-bold shadow-md hover:brightness-110 cursor-pointer"
-        >
-          ✨ AI 教学
-        </button>
+        {/* Actions: AI Demo & AI Tutor */}
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={handleToggleAiDemo}
+            className={`px-3 py-1.5 rounded-xl font-bold text-xs shadow-md transition-all cursor-pointer ${
+              isAiDemoRunning
+                ? 'bg-amber-500 text-slate-950 ring-2 ring-amber-300'
+                : 'glass-button text-sky-300 hover:text-white border-sky-500/40'
+            }`}
+          >
+            {isAiDemoRunning ? '⏸ 暂停' : '▶ 演示复原'}
+          </button>
+
+          <button
+            type="button"
+            onClick={handleCallAiTutor}
+            disabled={isAiDemoRunning}
+            className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-sky-500 to-emerald-400 text-slate-950 font-bold text-xs shadow-md hover:brightness-110 cursor-pointer"
+          >
+            ✨ AI 教学
+          </button>
+        </div>
       </div>
     </div>
   );
