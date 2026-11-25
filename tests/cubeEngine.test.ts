@@ -40,4 +40,46 @@ describe('CubeEngine Helpers & 3D Generators', () => {
       expect(arrowGroup.children.length).toBeGreaterThanOrEqual(2); // Tube + Cone
     }
   });
+
+  it('should correctly determine moves from drag on center, edge, and corner pieces across faces', async () => {
+    const { CubeEngine } = await import('../src/engine/CubeEngine');
+    const engine = new CubeEngine();
+
+    const mockSticker = (face: Face, isCenter: boolean, x: number, y: number, z: number): THREE.Mesh => {
+      const mesh = new THREE.Mesh();
+      const cubie = new THREE.Mesh();
+      cubie.position.set(x, y, z);
+      mesh.userData = {
+        initialFace: face,
+        isCenter,
+        cubie,
+      };
+      return mesh;
+    };
+
+    // 1. Center piece of Front face (swipe right -> F, swipe left -> F')
+    const centerF = mockSticker('F', true, 0, 0, 1);
+    expect(engine.determineMoveFromDrag(centerF, 50, 0)).toBe('F');
+    expect(engine.determineMoveFromDrag(centerF, -50, 0)).toBe("F'");
+
+    // 2. Top row of Front face (swipe right -> U', swipe left -> U)
+    const topEdgeF = mockSticker('F', false, 0, 1, 1);
+    expect(engine.determineMoveFromDrag(topEdgeF, 50, 0)).toBe("U'");
+    expect(engine.determineMoveFromDrag(topEdgeF, -50, 0)).toBe('U');
+
+    // 3. Right column of Front face (swipe up -> R, swipe down -> R')
+    const rightEdgeF = mockSticker('F', false, 1, 0, 1);
+    expect(engine.determineMoveFromDrag(rightEdgeF, 0, -50)).toBe('R');
+    expect(engine.determineMoveFromDrag(rightEdgeF, 0, 50)).toBe("R'");
+
+    // 4. Center piece of Up face (swipe right -> U, swipe left -> U')
+    const centerU = mockSticker('U', true, 0, 1, 0);
+    expect(engine.determineMoveFromDrag(centerU, 50, 0)).toBe('U');
+    expect(engine.determineMoveFromDrag(centerU, -50, 0)).toBe("U'");
+
+    // 5. Center piece of Right face (swipe right -> R, swipe left -> R')
+    const centerR = mockSticker('R', true, 1, 0, 0);
+    expect(engine.determineMoveFromDrag(centerR, 50, 0)).toBe('R');
+    expect(engine.determineMoveFromDrag(centerR, -50, 0)).toBe("R'");
+  });
 });

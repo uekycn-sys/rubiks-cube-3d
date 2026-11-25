@@ -60,6 +60,7 @@ export class CubeEngine {
   private pointerDownTime = 0;
   private intersectedSticker: THREE.Mesh | null = null;
   private hoveredFaceletIndex: number | null = null;
+  private currentPreviewMove: Move | null = null;
 
   // Camera Animation
   private isCameraMoving = false;
@@ -649,6 +650,7 @@ export class CubeEngine {
       this.isPointerDown = true;
       this.pointerDownPos.set(e.clientX, e.clientY);
       this.pointerDownTime = performance.now();
+      this.currentPreviewMove = null;
 
       this.updateMouse(e);
       this.raycaster.setFromCamera(this.mouse, this.camera);
@@ -660,6 +662,14 @@ export class CubeEngine {
           this.intersectedSticker = hit.object as THREE.Mesh;
           break;
         }
+      }
+
+      // If user touches a cube piece in game/free/speedrun/level mode:
+      // LOCK OrbitControls so dragging rotates the specific cube layer, NOT the entire camera view!
+      if (this.intersectedSticker && this.mode !== 'paint') {
+        this.controls.enabled = false;
+      } else {
+        this.controls.enabled = true;
       }
     });
 
@@ -685,12 +695,29 @@ export class CubeEngine {
           this.hoveredFaceletIndex = foundIdx;
           this.callbacks.onFaceletHover?.(foundIdx, isCenter);
         }
+      } else if (this.isPointerDown && this.intersectedSticker && this.mode !== 'paint' && this.mode !== 'tutor') {
+        // Drag turn prospective preview (Layer Highlight Box + 3D Curved Arrow preview)
+        const deltaX = e.clientX - this.pointerDownPos.x;
+        const deltaY = e.clientY - this.pointerDownPos.y;
+        const dist = Math.hypot(deltaX, deltaY);
+
+        if (dist > 12) {
+          const prospectiveMove = this.determineMoveFromDrag(this.intersectedSticker, deltaX, deltaY);
+          if (prospectiveMove && prospectiveMove !== this.currentPreviewMove) {
+            this.currentPreviewMove = prospectiveMove;
+            this.showTutorGuide(prospectiveMove);
+          }
+        } else if (dist <= 6 && this.currentPreviewMove) {
+          this.hideTutorGuide();
+          this.currentPreviewMove = null;
+        }
       }
     });
 
-    window.addEventListener('pointerup', (e) => {
+    const handlePointerUpOrCancel = (e: PointerEvent | MouseEvent) => {
       if (!this.isPointerDown) return;
       this.isPointerDown = false;
+      this.controls.enabled = true; // Always restore camera control
 
       const deltaX = e.clientX - this.pointerDownPos.x;
       const deltaY = e.clientY - this.pointerDownPos.y;
@@ -704,13 +731,23 @@ export class CubeEngine {
           this.callbacks.onFaceletClick?.(faceletIndex, isCenter);
           this.callbacks.onSound?.('click');
         }
-      } else if (dist > 25 && this.mode !== 'paint' && this.mode !== 'tutor') {
-        // Drag turn detection in game/free mode
-        if (this.intersectedSticker) {
-          this.handleSurfaceDrag(this.intersectedSticker, deltaX, deltaY);
+      } else if (dist >= 16 && this.mode !== 'paint' && this.mode !== 'tutor') {
+        // Apply detected move
+        const move = this.currentPreviewMove || (this.intersectedSticker ? this.determineMoveFromDrag(this.intersectedSticker, deltaX, deltaY) : null);
+        if (move) {
+          this.applyMove(move);
         }
       }
-    });
+
+      if (this.currentPreviewMove) {
+        this.hideTutorGuide();
+        this.currentPreviewMove = null;
+      }
+      this.intersectedSticker = null;
+    };
+
+    window.addEventListener('pointerup', handlePointerUpOrCancel);
+    window.addEventListener('pointercancel', handlePointerUpOrCancel);
 
     // Resize handling
     this.resizeObserver = new ResizeObserver(() => {
@@ -727,50 +764,108 @@ export class CubeEngine {
 
   /**
    * Converts 2D screen drag on a cubie face into corresponding 3D Singmaster move
+   * Supports all 6 faces (U, D, L, R, F, B), center pieces (direct face rotation),
+   * and edge/corner pieces (layer rotation).
    */
-  private handleSurfaceDrag(sticker: THREE.Mesh, deltaX: number, deltaY: number): void {
-    if (this.isAnimating) return;
+  public determineMoveFromDrag(sticker: THREE.Mesh, deltaX: number, deltaY: number): Move | null {
+    if (this.isAnimating) return null;
 
     const initialFace = sticker.userData.initialFace as Face;
+    const isCenter = sticker.userData.isCenter as boolean;
     const cubie = sticker.userData.cubie as THREE.Mesh;
     const pos = cubie.position;
 
-    // Based on face and drag direction, determine move
-    let move: Move | null = null;
     const absX = Math.abs(deltaX);
     const absY = Math.abs(deltaY);
 
-    if (initialFace === 'F') {
-      if (absX > absY) {
-        // Horizontal drag -> U or D layer
-        if (pos.y > 0.5) move = deltaX > 0 ? "U'" : 'U';
-        else if (pos.y < -0.5) move = deltaX > 0 ? 'D' : "D'";
-      } else {
-        // Vertical drag -> L or R layer
-        if (pos.x > 0.5) move = deltaY < 0 ? 'R' : "R'";
-        else if (pos.x < -0.5) move = deltaY > 0 ? 'L' : "L'";
-      }
-    } else if (initialFace === 'R') {
-      if (absX > absY) {
-        if (pos.y > 0.5) move = deltaX > 0 ? "U'" : 'U';
-        else if (pos.y < -0.5) move = deltaX > 0 ? 'D' : "D'";
-      } else {
-        if (pos.z > 0.5) move = deltaY > 0 ? "F'" : 'F';
-        else if (pos.z < -0.5) move = deltaY < 0 ? 'B' : "B'";
-      }
-    } else if (initialFace === 'U') {
-      if (absX > absY) {
-        if (pos.z > 0.5) move = deltaX > 0 ? 'F' : "F'";
-        else if (pos.z < -0.5) move = deltaX > 0 ? "B'" : 'B';
-      } else {
-        if (pos.x > 0.5) move = deltaY < 0 ? 'R' : "R'";
-        else if (pos.x < -0.5) move = deltaY > 0 ? 'L' : "L'";
+    // 1. Center piece drag: Directly rotates the face itself!
+    if (isCenter) {
+      switch (initialFace) {
+        case 'F':
+          return (deltaX > 0 || (absY > absX && deltaY < 0)) ? 'F' : "F'";
+        case 'B':
+          return (deltaX < 0 || (absY > absX && deltaY < 0)) ? 'B' : "B'";
+        case 'R':
+          return (deltaX > 0 || (absY > absX && deltaY < 0)) ? 'R' : "R'";
+        case 'L':
+          return (deltaX < 0 || (absY > absX && deltaY < 0)) ? 'L' : "L'";
+        case 'U':
+          return (deltaX > 0 || (absY > absX && deltaY < 0)) ? 'U' : "U'";
+        case 'D':
+          return (deltaX > 0 || (absY > absX && deltaY > 0)) ? 'D' : "D'";
       }
     }
 
-    if (move) {
-      this.applyMove(move);
+    // 2. Non-center pieces (edges & corners)
+    switch (initialFace) {
+      case 'F':
+        if (absX > absY) {
+          if (pos.y > 0.3) return deltaX > 0 ? "U'" : 'U';
+          if (pos.y < -0.3) return deltaX > 0 ? 'D' : "D'";
+          return deltaX > 0 ? 'F' : "F'";
+        } else {
+          if (pos.x > 0.3) return deltaY < 0 ? 'R' : "R'";
+          if (pos.x < -0.3) return deltaY > 0 ? 'L' : "L'";
+          return deltaY < 0 ? 'F' : "F'";
+        }
+
+      case 'B':
+        if (absX > absY) {
+          if (pos.y > 0.3) return deltaX > 0 ? 'U' : "U'";
+          if (pos.y < -0.3) return deltaX > 0 ? "D'" : 'D';
+          return deltaX < 0 ? 'B' : "B'";
+        } else {
+          if (pos.x > 0.3) return deltaY < 0 ? "R'" : 'R';
+          if (pos.x < -0.3) return deltaY > 0 ? "L'" : 'L';
+          return deltaY < 0 ? 'B' : "B'";
+        }
+
+      case 'R':
+        if (absX > absY) {
+          if (pos.y > 0.3) return deltaX > 0 ? 'U' : "U'";
+          if (pos.y < -0.3) return deltaX > 0 ? "D'" : 'D';
+          return deltaX > 0 ? 'R' : "R'";
+        } else {
+          if (pos.z > 0.3) return deltaY < 0 ? 'F' : "F'";
+          if (pos.z < -0.3) return deltaY > 0 ? 'B' : "B'";
+          return deltaY < 0 ? 'R' : "R'";
+        }
+
+      case 'L':
+        if (absX > absY) {
+          if (pos.y > 0.3) return deltaX > 0 ? "U'" : 'U';
+          if (pos.y < -0.3) return deltaX > 0 ? 'D' : "D'";
+          return deltaX < 0 ? 'L' : "L'";
+        } else {
+          if (pos.z > 0.3) return deltaY < 0 ? "F'" : 'F';
+          if (pos.z < -0.3) return deltaY > 0 ? "B'" : 'B';
+          return deltaY < 0 ? 'L' : "L'";
+        }
+
+      case 'U':
+        if (absX > absY) {
+          if (pos.z > 0.3) return deltaX > 0 ? 'F' : "F'";
+          if (pos.z < -0.3) return deltaX > 0 ? "B'" : 'B';
+          return deltaX > 0 ? 'U' : "U'";
+        } else {
+          if (pos.x > 0.3) return deltaY < 0 ? 'R' : "R'";
+          if (pos.x < -0.3) return deltaY > 0 ? 'L' : "L'";
+          return deltaY < 0 ? 'U' : "U'";
+        }
+
+      case 'D':
+        if (absX > absY) {
+          if (pos.z > 0.3) return deltaX > 0 ? "F'" : 'F';
+          if (pos.z < -0.3) return deltaX > 0 ? 'B' : "B'";
+          return deltaX > 0 ? 'D' : "D'";
+        } else {
+          if (pos.x > 0.3) return deltaY < 0 ? "R'" : 'R';
+          if (pos.x < -0.3) return deltaY > 0 ? "L'" : 'L';
+          return deltaY > 0 ? 'D' : "D'";
+        }
     }
+
+    return null;
   }
 
   public handleResize(): void {
