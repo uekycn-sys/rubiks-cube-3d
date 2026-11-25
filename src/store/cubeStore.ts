@@ -127,6 +127,15 @@ class StateStore {
     });
   }
 
+  public setPaintFacelets(facelets: string): void {
+    const validation = validateCubeState(facelets);
+    this.setState({
+      paintFacelets: facelets,
+      validationResult: validation,
+      solveError: null,
+    });
+  }
+
   public resetPaintToBlank(): void {
     this.setState({
       paintFacelets: BLANK_PAINT_FACELETS,

@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useCubeStore } from '../../store/useCubeStore';
 import { store } from '../../store/cubeStore';
 import { NetEditor } from './NetEditor';
 import { PaintPalette } from './PaintPalette';
+import { CameraScannerModal } from './CameraScannerModal';
 import { solveCube } from '../../core/solverService';
 import { Face } from '../../core/types';
 import { soundManager } from '../../audio/SoundManager';
@@ -18,6 +19,7 @@ export const RealCubePaintPanel: React.FC<RealCubePaintPanelProps> = ({
 }) => {
   const { paintFacelets, selectedPaintColor, validationResult, isSolving, solveError } =
     useCubeStore();
+  const [showScanner, setShowScanner] = useState(false);
 
   const handleFaceletClick = (index: number) => {
     store.setPaintFacelet(index, selectedPaintColor);
@@ -49,8 +51,8 @@ export const RealCubePaintPanel: React.FC<RealCubePaintPanelProps> = ({
 
   return (
     <div className="flex flex-col gap-2.5 w-full select-none pb-2">
-      {/* 1. Benchmark Holding Orientation Card */}
-      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-sky-900/40 via-blue-900/30 to-indigo-900/40 border border-sky-400/30 p-3 shadow-lg">
+      {/* 1. Benchmark Holding Orientation Card + Camera Scan CTA */}
+      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-sky-900/40 via-blue-900/30 to-indigo-900/40 border border-sky-400/30 p-3 shadow-lg flex flex-col gap-2.5">
         <div className="flex items-start gap-2.5">
           <div className="w-8 h-8 rounded-xl bg-sky-500/20 border border-sky-400/40 flex items-center justify-center shrink-0 text-base shadow-inner">
             🧭
@@ -66,10 +68,20 @@ export const RealCubePaintPanel: React.FC<RealCubePaintPanelProps> = ({
               <span>左：<strong className="text-amber-500">橙(L)</strong></span>
               <span>底：<strong className="text-yellow-400">黄(D)</strong></span>
               <span>背：<strong className="text-blue-400">蓝(B)</strong></span>
-              <span className="text-slate-500">• 支持直接在左侧 3D 魔方上点选涂色</span>
+              <span className="text-slate-500">• 支持 3D 点选或摄像头扫描</span>
             </div>
           </div>
         </div>
+
+        {/* Camera Scan Entry Button */}
+        <button
+          type="button"
+          onClick={() => setShowScanner(true)}
+          className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-cyan-500/25 to-sky-500/25 hover:from-cyan-500/40 hover:to-sky-500/40 border border-cyan-400/50 text-cyan-200 hover:text-white text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm active:scale-[0.99]"
+        >
+          <span>📷</span>
+          <span>摄像头实时扫描自动填色（推荐）</span>
+        </button>
       </div>
 
       {/* 2. Camera Align Quick Buttons on 3D Area */}
@@ -179,6 +191,17 @@ export const RealCubePaintPanel: React.FC<RealCubePaintPanelProps> = ({
           )}
         </button>
       </div>
+
+      {/* Camera Real-Time Scanner Modal */}
+      {showScanner && (
+        <CameraScannerModal
+          onComplete={(scannedFacelets) => {
+            store.setPaintFacelets(scannedFacelets);
+            setShowScanner(false);
+          }}
+          onClose={() => setShowScanner(false)}
+        />
+      )}
     </div>
   );
 };
