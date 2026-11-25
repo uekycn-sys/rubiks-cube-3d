@@ -32,22 +32,28 @@ export const LevelPlayOverlay: React.FC<LevelPlayOverlayProps> = ({
   const startTimeRef = useRef(performance.now());
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const aiDemoSessionRef = useRef(0);
+  const stepCountRef = useRef(0);
+  const isAiDemoRef = useRef(false);
+  const isVictoryRef = useRef(false);
+  const isFailedRef = useRef(false);
 
   // Victory Handler
-  const handleVictory = useCallback(() => {
-    if (isVictory) return;
+  const handleVictory = useCallback((finalSteps?: number) => {
+    if (isVictoryRef.current) return;
+    isVictoryRef.current = true;
     setIsVictory(true);
 
+    const usedSteps = finalSteps ?? stepCountRef.current;
     const elapsedSeconds = Math.round((performance.now() - startTimeRef.current) / 1000);
 
     // Calculate stars
     let stars = 1;
     if (level.type === 'step_limit' && level.maxSteps) {
-      stars = stepCount <= level.maxSteps ? 3 : 2;
+      stars = usedSteps <= level.maxSteps ? 3 : 2;
     } else if (level.type === 'time_limit' && level.maxSeconds) {
       stars = elapsedSeconds <= level.maxSeconds / 2 ? 3 : 2;
     } else {
-      stars = stepCount <= (level.maxSteps || 15) ? 3 : 2;
+      stars = usedSteps <= (level.maxSteps || 15) ? 3 : 2;
     }
     setEarnedStars(stars);
 
@@ -68,20 +74,19 @@ export const LevelPlayOverlay: React.FC<LevelPlayOverlayProps> = ({
     } catch {
       // Ignore
     }
-  }, [isVictory, level, stepCount]);
+  }, [level]);
 
-  // Load level and apply scramble
+  // Load level and apply scramble instantly (zero animation, zero spurious step counts)
   const loadLevelScramble = useCallback(() => {
     if (!engine) return;
     aiDemoSessionRef.current++;
-    setIsAiDemoRunning(false);
-    engine.cancelAnimations();
-    engine.hideTutorGuide();
+    isAiDemoRef.current = false;
+    isVictoryRef.current = false;
+    isFailedRef.current = false;
+    stepCountRef.current = 0;
 
-    engine.setStateFromFacelets('UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB');
-    for (const m of level.scramble) {
-      engine.applyMove(m, 100); // Instant setup
-    }
+    setIsAiDemoRunning(false);
+    engine.applyMovesInstant(level.scramble, true);
 
     setStepCount(0);
     setRemainingTime(level.maxSeconds || null);
@@ -95,9 +100,9 @@ export const LevelPlayOverlay: React.FC<LevelPlayOverlayProps> = ({
     loadLevelScramble();
   }, [loadLevelScramble]);
 
-  // Countdown timer for time_limit levels
+  // Countdown timer for time_limit levels (pauses during AI demo)
   useEffect(() => {
-    if (level.type !== 'time_limit' || isVictory || isFailed) {
+    if (level.type !== 'time_limit' || isVictory || isFailed || isAiDemoRunning) {
       if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
       return;
     }
@@ -106,6 +111,7 @@ export const LevelPlayOverlay: React.FC<LevelPlayOverlayProps> = ({
       setRemainingTime((prev) => {
         if (prev === null) return null;
         if (prev <= 1) {
+          isFailedRef.current = true;
           setIsFailed(true);
           soundManager.playError();
           clearInterval(timerIntervalRef.current!);
@@ -118,7 +124,7 @@ export const LevelPlayOverlay: React.FC<LevelPlayOverlayProps> = ({
     return () => {
       if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     };
-  }, [level, isVictory, isFailed]);
+  }, [level, isVictory, isFailed, isAiDemoRunning]);
 
   // Hook into engine move complete to update step count and check victory
   useEffect(() => {
@@ -127,23 +133,28 @@ export const LevelPlayOverlay: React.FC<LevelPlayOverlayProps> = ({
     const originalCallback = engine.callbacks.onMoveComplete;
     engine.callbacks.onMoveComplete = (move, remaining) => {
       originalCallback?.(move, remaining);
+      if (isVictoryRef.current || isFailedRef.current) return;
 
-      setStepCount((prev) => {
-        const next = prev + 1;
-        // Check step limit failure
-        if (level.type === 'step_limit' && level.maxSteps && next > level.maxSteps) {
-          setIsFailed(true);
-          soundManager.playError();
-        }
-        return next;
-      });
+      const nextSteps = stepCountRef.current + 1;
+      stepCountRef.current = nextSteps;
+      setStepCount(nextSteps);
 
-      // Clear AI hint on move
-      setAiHint(null);
+      // Clear manual hint on user move, preserve banner while AI demo runs
+      if (!isAiDemoRef.current) {
+        setAiHint(null);
+      }
 
-      // Check if cube is solved
+      // Check victory BEFORE step-limit failure so winning on the final allowed step counts!
       if (engine.isSolved()) {
-        handleVictory();
+        handleVictory(nextSteps);
+        return;
+      }
+
+      // Check step limit failure (skipped while AI demo is running)
+      if (!isAiDemoRef.current && level.type === 'step_limit' && level.maxSteps && nextSteps > level.maxSteps) {
+        isFailedRef.current = true;
+        setIsFailed(true);
+        soundManager.playError();
       }
     };
 
@@ -178,6 +189,7 @@ export const LevelPlayOverlay: React.FC<LevelPlayOverlayProps> = ({
   const handleSwitchToAiTutor = async () => {
     if (!engine) return;
     aiDemoSessionRef.current++;
+    isAiDemoRef.current = false;
     setIsAiDemoRunning(false);
     engine.cancelAnimations();
 
@@ -197,6 +209,7 @@ export const LevelPlayOverlay: React.FC<LevelPlayOverlayProps> = ({
 
     if (isAiDemoRunning) {
       aiDemoSessionRef.current++;
+      isAiDemoRef.current = false;
       setIsAiDemoRunning(false);
       engine.cancelAnimations();
       engine.hideTutorGuide();
@@ -205,6 +218,7 @@ export const LevelPlayOverlay: React.FC<LevelPlayOverlayProps> = ({
     }
 
     const sessionId = ++aiDemoSessionRef.current;
+    isAiDemoRef.current = true;
     setIsAiDemoRunning(true);
     setAiHint('AI 正在全自动慢速演示本关通关解法...');
 
@@ -227,6 +241,7 @@ export const LevelPlayOverlay: React.FC<LevelPlayOverlayProps> = ({
     } finally {
       engine.hideTutorGuide();
       if (aiDemoSessionRef.current === sessionId) {
+        isAiDemoRef.current = false;
         setIsAiDemoRunning(false);
       }
     }
@@ -236,6 +251,7 @@ export const LevelPlayOverlay: React.FC<LevelPlayOverlayProps> = ({
   useEffect(() => {
     return () => {
       aiDemoSessionRef.current++;
+      isAiDemoRef.current = false;
       engine?.cancelAnimations();
     };
   }, [engine]);

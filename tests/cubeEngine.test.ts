@@ -82,4 +82,37 @@ describe('CubeEngine Helpers & 3D Generators', () => {
     expect(engine.determineMoveFromDrag(centerR, 50, 0)).toBe('R');
     expect(engine.determineMoveFromDrag(centerR, -50, 0)).toBe("R'");
   });
+
+  it('should handle rotated cubie stickers using true world normals rather than stale initialFace', async () => {
+    const { CubeEngine } = await import('../src/engine/CubeEngine');
+    const engine = new CubeEngine();
+
+    // Simulate a cubie originally from (1, 1, 1) whose Front sticker rotated onto Up (+Y) after R move:
+    const cubie = new THREE.Mesh();
+    cubie.position.set(1, 1, -1);
+    cubie.rotation.set(-Math.PI / 2, 0, 0); // R turn rotates +Z local face -> +Y world!
+    cubie.updateMatrixWorld(true);
+
+    const sticker = new THREE.Mesh();
+    sticker.position.set(0, 0, 0.472); // Originally placed on +Z (initialFace: 'F')
+    sticker.rotation.set(0, 0, 0);
+    cubie.add(sticker);
+    cubie.updateMatrixWorld(true);
+
+    sticker.userData = {
+      initialFace: 'F',
+      isCenter: false,
+      cubie,
+    };
+
+    // Verify local +Z transformed into world +Y
+    const worldNormal = new THREE.Vector3(0, 0, 1).transformDirection(sticker.matrixWorld).round();
+    expect(worldNormal.y).toBe(1);
+
+    // Dragging RIGHT horizontally (+X) on this rotated top sticker (z = -1 back edge of U) should turn B' / B, NOT U!
+    const moveRight = engine.determineMoveFromDrag(sticker, 50, 0);
+    expect(moveRight).toBe("B'");
+    const moveLeft = engine.determineMoveFromDrag(sticker, -50, 0);
+    expect(moveLeft).toBe('B');
+  });
 });

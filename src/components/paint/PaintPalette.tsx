@@ -137,27 +137,27 @@ export const PaintPalette: React.FC<PaintPaletteProps> = ({
       </div>
 
       {/* Quick Action Helpers */}
-      <div className="flex items-center justify-center gap-2 pt-1 border-t border-slate-700/40 text-xs">
+      <div className="flex items-center justify-center flex-wrap gap-x-2 gap-y-1 pt-1.5 border-t border-slate-700/40 text-[11px]">
         <button
           type="button"
           onClick={onResetBlank}
-          className="px-2.5 py-1 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/70 transition-all font-medium text-[11px]"
+          className="px-2 py-1 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/70 transition-all font-medium whitespace-nowrap cursor-pointer"
         >
-          清空填色 (保留6中心)
+          清空填色
         </button>
         <span className="text-slate-700">•</span>
         <button
           type="button"
           onClick={onResetSolved}
-          className="px-2.5 py-1 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/70 transition-all font-medium text-[11px]"
+          className="px-2 py-1 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/70 transition-all font-medium whitespace-nowrap cursor-pointer"
         >
-          重置为已还原
+          还原初始状态
         </button>
         <span className="text-slate-700">•</span>
         <button
           type="button"
           onClick={onFillRandom}
-          className="px-2.5 py-1 rounded-lg text-sky-400 hover:text-sky-300 hover:bg-sky-500/10 transition-all font-medium text-[11px]"
+          className="px-2 py-1 rounded-lg text-sky-400 hover:text-sky-300 hover:bg-sky-500/10 transition-all font-medium whitespace-nowrap cursor-pointer"
         >
           🎲 随机填入测试状态
         </button>

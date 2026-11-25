@@ -14,10 +14,23 @@ describe('Solver Closed-Loop Verification', () => {
     expect(solution.length).toBe(0);
   });
 
-  it('should solve 1-move scramble and restore solved state', async () => {
+  it('should solve 1-move scramble optimally in 1 move and restore solved state', async () => {
     const cube = new CubeState();
     cube.applyMove('R');
     const solution = await solveCube(cube.getFacelets());
+    expect(solution).toEqual(["R'"]);
+
+    for (const move of solution) {
+      cube.applyMove(move);
+    }
+    expect(cube.isSolved()).toBe(true);
+  });
+
+  it('should solve 7-move step-limit Level 9 state within <= 7 moves via genuine search', async () => {
+    const cube = new CubeState();
+    cube.applyMoves(['R', 'U2', "R'", 'D', 'R', "D'", 'R2']);
+    const solution = await solveCube(cube.getFacelets());
+    expect(solution.length).toBeLessThanOrEqual(7);
     expect(solution.length).toBeGreaterThan(0);
 
     for (const move of solution) {

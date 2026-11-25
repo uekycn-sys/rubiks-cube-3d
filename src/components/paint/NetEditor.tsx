@@ -17,12 +17,12 @@ interface FaceSpec {
 }
 
 const FACES: FaceSpec[] = [
-  { face: 'U', nameZh: '顶面 (U)', subZh: '白色', offset: 0 },
-  { face: 'L', nameZh: '左面 (L)', subZh: '橙色', offset: 36 },
-  { face: 'F', nameZh: '正面 (F)', subZh: '绿色', offset: 18 },
-  { face: 'R', nameZh: '右面 (R)', subZh: '红色', offset: 9 },
-  { face: 'B', nameZh: '背面 (B)', subZh: '蓝色', offset: 45 },
-  { face: 'D', nameZh: '底面 (D)', subZh: '黄色', offset: 27 },
+  { face: 'U', nameZh: '顶 U', subZh: '白', offset: 0 },
+  { face: 'L', nameZh: '左 L', subZh: '橙', offset: 36 },
+  { face: 'F', nameZh: '前 F', subZh: '绿', offset: 18 },
+  { face: 'R', nameZh: '右 R', subZh: '红', offset: 9 },
+  { face: 'B', nameZh: '后 B', subZh: '蓝', offset: 45 },
+  { face: 'D', nameZh: '底 D', subZh: '黄', offset: 27 },
 ];
 
 export const NetEditor: React.FC<NetEditorProps> = ({
@@ -32,13 +32,13 @@ export const NetEditor: React.FC<NetEditorProps> = ({
 }) => {
   const renderFaceGrid = (spec: FaceSpec) => {
     return (
-      <div className="flex flex-col items-center">
-        <div className="text-[10px] font-medium text-slate-400 mb-1 flex items-center gap-1">
+      <div className="flex flex-col items-center shrink-0">
+        <div className="text-[10px] font-medium text-slate-400 mb-0.5 flex items-center gap-0.5 whitespace-nowrap">
           <span>{spec.nameZh}</span>
           <span className="text-slate-500 font-mono text-[9px]">({spec.subZh})</span>
         </div>
 
-        <div className="grid grid-cols-3 gap-1 p-1 bg-slate-900/80 rounded-lg border border-slate-700/50 shadow-inner">
+        <div className="grid grid-cols-3 gap-[3px] p-1 bg-slate-900/90 rounded-lg border border-slate-700/60 shadow-inner">
           {[0, 1, 2, 3, 4, 5, 6, 7, 8].map((subIdx) => {
             const index = spec.offset + subIdx;
             const colorCode = facelets[index] || 'X';
@@ -61,10 +61,10 @@ export const NetEditor: React.FC<NetEditorProps> = ({
                 style={{
                   backgroundColor: hexColor || 'rgba(30, 41, 59, 0.6)',
                 }}
-                className={`relative w-7 h-7 sm:w-8 sm:h-8 rounded-[5px] transition-all duration-150 flex items-center justify-center ${
+                className={`relative w-[21px] h-[21px] sm:w-[24px] sm:h-[24px] shrink-0 aspect-square rounded-[4px] transition-all duration-150 flex items-center justify-center ${
                   isCenter
-                    ? 'cursor-not-allowed opacity-90 border border-white/20'
-                    : 'cursor-pointer hover:scale-105 hover:z-10 hover:shadow-md'
+                    ? 'cursor-not-allowed opacity-95 border border-white/25'
+                    : 'cursor-pointer hover:scale-110 hover:z-10 hover:shadow-md'
                 } ${
                   isProblem
                     ? 'ring-2 ring-rose-500 ring-offset-1 ring-offset-slate-900 animate-pulse'
@@ -82,7 +82,7 @@ export const NetEditor: React.FC<NetEditorProps> = ({
 
                 {/* Empty 'X' marker */}
                 {colorCode === 'X' && !isCenter && (
-                  <span className="text-slate-500 text-[10px] font-mono select-none">+</span>
+                  <span className="text-slate-500 text-[10px] leading-none font-mono select-none">+</span>
                 )}
               </button>
             );
@@ -95,14 +95,14 @@ export const NetEditor: React.FC<NetEditorProps> = ({
   const getFaceSpec = (face: Face) => FACES.find((f) => f.face === face)!;
 
   return (
-    <div className="w-full flex flex-col items-center select-none py-2">
+    <div className="w-full flex flex-col items-center select-none py-1.5">
       {/* Top Face U */}
-      <div className="mb-2">
+      <div className="mb-1.5">
         {renderFaceGrid(getFaceSpec('U'))}
       </div>
 
-      {/* Middle Row: L - F - R - B */}
-      <div className="flex items-center gap-2 sm:gap-3 mb-2 overflow-x-auto max-w-full pb-1">
+      {/* Middle Row: L - F - R - B (fits cleanly in 320px+ with zero horizontal scroll or squashing) */}
+      <div className="flex items-center justify-center gap-1.5 sm:gap-2 mb-1.5 w-full">
         {renderFaceGrid(getFaceSpec('L'))}
         {renderFaceGrid(getFaceSpec('F'))}
         {renderFaceGrid(getFaceSpec('R'))}

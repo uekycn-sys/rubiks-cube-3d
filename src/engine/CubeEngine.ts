@@ -12,6 +12,7 @@ import {
   Move,
   Face,
   ColorTheme,
+  SOLVED_FACELETS,
 } from '../core/types';
 import { CubeState, CENTER_FACELETS } from '../core/cubeState';
 import { THEME_PALETTES, CubePalette } from './themes';
@@ -58,9 +59,16 @@ export class CubeEngine {
   private isPointerDown = false;
   private pointerDownPos = new THREE.Vector2();
   private pointerDownTime = 0;
+  private pointerDownHitPoint = new THREE.Vector3();
   private intersectedSticker: THREE.Mesh | null = null;
   private hoveredFaceletIndex: number | null = null;
   private currentPreviewMove: Move | null = null;
+  private hasTriggeredSwipeMove = false;
+
+  // Shared materials / cleanup references
+  private cubeBodyMat: THREE.MeshPhysicalMaterial | null = null;
+  private boundOnPointerMove: ((e: PointerEvent) => void) | null = null;
+  private boundOnPointerUp: ((e: PointerEvent) => void) | null = null;
 
   // Camera Animation
   private isCameraMoving = false;
@@ -109,7 +117,10 @@ export class CubeEngine {
 
     // 4. Environment & Lighting
     const pmremGenerator = new THREE.PMREMGenerator(this.renderer);
-    this.scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
+    const roomEnv = new RoomEnvironment();
+    this.scene.environment = pmremGenerator.fromScene(roomEnv, 0.04).texture;
+    roomEnv.dispose();
+    pmremGenerator.dispose();
 
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.9);
     this.scene.add(ambientLight);
@@ -162,7 +173,7 @@ export class CubeEngine {
     this.cubieInitialPositions.clear();
 
     const cubieGeo = new RoundedBoxGeometry(0.94, 0.94, 0.94, 4, 0.07);
-    const bodyMat = new THREE.MeshPhysicalMaterial({
+    this.cubeBodyMat = new THREE.MeshPhysicalMaterial({
       color: this.palette.body,
       roughness: 0.65,
       metalness: 0.1,
@@ -176,7 +187,7 @@ export class CubeEngine {
         for (let z = -1; z <= 1; z++) {
           if (x === 0 && y === 0 && z === 0) continue; // Core block omitted
 
-          const cubie = new THREE.Mesh(cubieGeo, bodyMat.clone());
+          const cubie = new THREE.Mesh(cubieGeo, this.cubeBodyMat);
           cubie.position.set(x, y, z);
           cubie.userData = { initialX: x, initialY: y, initialZ: z };
           this.cubieInitialPositions.set(cubie, new THREE.Vector3(x, y, z));
@@ -325,9 +336,9 @@ export class CubeEngine {
     this.theme = theme;
     this.palette = THEME_PALETTES[theme];
 
-    // Refresh cubie bodies
-    for (const cubie of this.cubies) {
-      (cubie.material as THREE.MeshPhysicalMaterial).color.setHex(this.palette.body);
+    // Refresh shared cubie body material
+    if (this.cubeBodyMat) {
+      this.cubeBodyMat.color.setHex(this.palette.body);
     }
 
     // Refresh stickers
@@ -344,8 +355,20 @@ export class CubeEngine {
 
   public setInteractionMode(mode: 'free' | 'paint' | 'tutor' | 'level' | 'speedrun'): void {
     this.mode = mode;
+    if (this.hoveredFaceletIndex !== null) {
+      const prevMesh = this.stickerMeshes[this.hoveredFaceletIndex];
+      if (prevMesh) {
+        (prevMesh.material as THREE.MeshPhysicalMaterial).emissive.setHex(0x000000);
+        (prevMesh.material as THREE.MeshPhysicalMaterial).emissiveIntensity = 0;
+      }
+      this.hoveredFaceletIndex = null;
+    }
+    this.currentPreviewMove = null;
     if (mode === 'paint') {
       this.hideTutorGuide();
+    }
+    if (this.controls) {
+      this.controls.enabled = true;
     }
   }
 
@@ -444,6 +467,18 @@ export class CubeEngine {
 
   public clearQueue(): void {
     this.moveQueue = [];
+  }
+
+  /**
+   * Instantly applies a move sequence from solved state without animation delays or move-complete callbacks.
+   * Ideal for instant level scrambles, WCA scrambles, and pattern generation.
+   */
+  public applyMovesInstant(moves: Move[], fromSolved = true): void {
+    this.cancelAnimations();
+    this.hideTutorGuide();
+    const state = new CubeState(fromSolved ? SOLVED_FACELETS : this.cubeState.getFacelets());
+    state.applyMoves(moves);
+    this.setStateFromFacelets(state.getFacelets());
   }
 
   /**
@@ -599,6 +634,17 @@ export class CubeEngine {
   public hideTutorGuide(): void {
     while (this.tutorGroup.children.length > 0) {
       const child = this.tutorGroup.children[0];
+      child.traverse((obj) => {
+        const mesh = obj as THREE.Mesh;
+        if (mesh.geometry) mesh.geometry.dispose();
+        if (mesh.material) {
+          if (Array.isArray(mesh.material)) {
+            mesh.material.forEach((m) => m.dispose());
+          } else {
+            mesh.material.dispose();
+          }
+        }
+      });
       this.tutorGroup.remove(child);
     }
   }
@@ -641,13 +687,16 @@ export class CubeEngine {
   }
 
   /**
-   * Event listeners and Raycaster drag-to-rotate / click-to-paint logic
+   * Event listeners and 3D Raycaster drag-to-rotate / click-to-paint logic
    */
   private setupEvents(): void {
     const dom = this.renderer.domElement;
+    dom.style.touchAction = 'none';
 
     dom.addEventListener('pointerdown', (e) => {
       this.isPointerDown = true;
+      this.isCameraMoving = false;
+      this.hasTriggeredSwipeMove = false;
       this.pointerDownPos.set(e.clientX, e.clientY);
       this.pointerDownTime = performance.now();
       this.currentPreviewMove = null;
@@ -660,49 +709,94 @@ export class CubeEngine {
       for (const hit of hits) {
         if (hit.object.userData?.isFacelet) {
           this.intersectedSticker = hit.object as THREE.Mesh;
+          this.pointerDownHitPoint.copy(hit.point);
           break;
         }
       }
 
-      // If user touches a cube piece in game/free/speedrun/level mode:
-      // LOCK OrbitControls so dragging rotates the specific cube layer, NOT the entire camera view!
-      if (this.intersectedSticker && this.mode !== 'paint') {
+      // If user touches a cube sticker in play/level/speedrun mode:
+      // Lock OrbitControls so dragging rotates the specific cube layer, NEVER the whole cube!
+      if (this.intersectedSticker && this.mode !== 'paint' && this.mode !== 'tutor') {
         this.controls.enabled = false;
+        dom.style.cursor = 'grabbing';
       } else {
         this.controls.enabled = true;
       }
     });
 
-    window.addEventListener('pointermove', (e) => {
+    this.boundOnPointerMove = (e: PointerEvent) => {
       this.updateMouse(e);
 
-      // Handle hover in paint mode
-      if (this.mode === 'paint' && !this.isPointerDown) {
+      // 1. Hover handling when pointer is not down
+      if (!this.isPointerDown) {
         this.raycaster.setFromCamera(this.mouse, this.camera);
         const hits = this.raycaster.intersectObjects(this.cubies, true);
-        let foundIdx: number | null = null;
-        let isCenter = false;
-
+        let foundSticker: THREE.Mesh | null = null;
         for (const hit of hits) {
           if (hit.object.userData?.isFacelet) {
-            foundIdx = hit.object.userData.faceletIndex;
-            isCenter = hit.object.userData.isCenter;
+            foundSticker = hit.object as THREE.Mesh;
             break;
           }
         }
 
-        if (foundIdx !== this.hoveredFaceletIndex) {
-          this.hoveredFaceletIndex = foundIdx;
-          this.callbacks.onFaceletHover?.(foundIdx, isCenter);
+        if (this.mode === 'paint') {
+          const foundIdx = foundSticker ? (foundSticker.userData.faceletIndex as number) : null;
+          const isCenter = foundSticker ? (foundSticker.userData.isCenter as boolean) : false;
+
+          if (foundIdx !== this.hoveredFaceletIndex) {
+            // Clear previous sticker hover glow
+            if (this.hoveredFaceletIndex !== null) {
+              const prevMesh = this.stickerMeshes[this.hoveredFaceletIndex];
+              if (prevMesh) {
+                (prevMesh.material as THREE.MeshPhysicalMaterial).emissive.setHex(0x000000);
+                (prevMesh.material as THREE.MeshPhysicalMaterial).emissiveIntensity = 0;
+              }
+            }
+            this.hoveredFaceletIndex = foundIdx;
+            if (foundSticker && !isCenter) {
+              const mat = foundSticker.material as THREE.MeshPhysicalMaterial;
+              mat.emissive.setHex(0x38BDF8);
+              mat.emissiveIntensity = 0.25;
+            }
+            this.callbacks.onFaceletHover?.(foundIdx, isCenter);
+          }
+
+          dom.style.cursor = foundSticker ? (isCenter ? 'not-allowed' : 'pointer') : 'grab';
+        } else {
+          dom.style.cursor = foundSticker && this.mode !== 'tutor' ? 'pointer' : 'grab';
         }
-      } else if (this.isPointerDown && this.intersectedSticker && this.mode !== 'paint' && this.mode !== 'tutor') {
-        // Drag turn prospective preview (Layer Highlight Box + 3D Curved Arrow preview)
+        return;
+      }
+
+      // 2. Active drag handling in play modes (live AI-style 3D preview + fast swipe trigger)
+      if (
+        this.isPointerDown &&
+        !this.hasTriggeredSwipeMove &&
+        this.intersectedSticker &&
+        this.mode !== 'paint' &&
+        this.mode !== 'tutor'
+      ) {
         const deltaX = e.clientX - this.pointerDownPos.x;
         const deltaY = e.clientY - this.pointerDownPos.y;
         const dist = Math.hypot(deltaX, deltaY);
 
-        if (dist > 12) {
-          const prospectiveMove = this.determineMoveFromDrag(this.intersectedSticker, deltaX, deltaY);
+        if (dist > 10) {
+          const prospectiveMove = this.determineMoveFromDrag(
+            this.intersectedSticker,
+            deltaX,
+            deltaY,
+            this.pointerDownHitPoint
+          );
+
+          // Instant swipe execution when dragged decisively (>= 38px) for zero-lag native feel
+          if (prospectiveMove && dist >= 38 && !this.isAnimating) {
+            this.hasTriggeredSwipeMove = true;
+            this.hideTutorGuide();
+            this.currentPreviewMove = null;
+            this.applyMove(prospectiveMove);
+            return;
+          }
+
           if (prospectiveMove && prospectiveMove !== this.currentPreviewMove) {
             this.currentPreviewMove = prospectiveMove;
             this.showTutorGuide(prospectiveMove);
@@ -712,30 +806,42 @@ export class CubeEngine {
           this.currentPreviewMove = null;
         }
       }
-    });
+    };
 
-    const handlePointerUpOrCancel = (e: PointerEvent | MouseEvent) => {
+    this.boundOnPointerUp = (e: PointerEvent) => {
       if (!this.isPointerDown) return;
       this.isPointerDown = false;
       this.controls.enabled = true; // Always restore camera control
+      dom.style.cursor = 'grab';
 
       const deltaX = e.clientX - this.pointerDownPos.x;
       const deltaY = e.clientY - this.pointerDownPos.y;
       const dist = Math.hypot(deltaX, deltaY);
       const duration = performance.now() - this.pointerDownTime;
 
-      // Click detection (short duration, small distance)
-      if (dist < 8 && duration < 350) {
-        if (this.intersectedSticker && this.mode === 'paint') {
-          const { faceletIndex, isCenter } = this.intersectedSticker.userData;
-          this.callbacks.onFaceletClick?.(faceletIndex, isCenter);
-          this.callbacks.onSound?.('click');
-        }
-      } else if (dist >= 16 && this.mode !== 'paint' && this.mode !== 'tutor') {
-        // Apply detected move
-        const move = this.currentPreviewMove || (this.intersectedSticker ? this.determineMoveFromDrag(this.intersectedSticker, deltaX, deltaY) : null);
-        if (move) {
-          this.applyMove(move);
+      if (!this.hasTriggeredSwipeMove) {
+        // Click detection (short duration, small distance) in paint mode
+        if (dist < 10 && duration < 400) {
+          if (this.intersectedSticker && this.mode === 'paint') {
+            const { faceletIndex, isCenter } = this.intersectedSticker.userData;
+            this.callbacks.onFaceletClick?.(faceletIndex, isCenter);
+            this.callbacks.onSound?.('click');
+          }
+        } else if (dist >= 14 && this.mode !== 'paint' && this.mode !== 'tutor') {
+          // Apply detected move on release if swipe was deliberate (>= 14px)
+          const move =
+            this.currentPreviewMove ||
+            (this.intersectedSticker
+              ? this.determineMoveFromDrag(
+                  this.intersectedSticker,
+                  deltaX,
+                  deltaY,
+                  this.pointerDownHitPoint
+                )
+              : null);
+          if (move) {
+            this.applyMove(move);
+          }
         }
       }
 
@@ -744,10 +850,12 @@ export class CubeEngine {
         this.currentPreviewMove = null;
       }
       this.intersectedSticker = null;
+      this.hasTriggeredSwipeMove = false;
     };
 
-    window.addEventListener('pointerup', handlePointerUpOrCancel);
-    window.addEventListener('pointercancel', handlePointerUpOrCancel);
+    window.addEventListener('pointermove', this.boundOnPointerMove);
+    window.addEventListener('pointerup', this.boundOnPointerUp);
+    window.addEventListener('pointercancel', this.boundOnPointerUp);
 
     // Resize handling
     this.resizeObserver = new ResizeObserver(() => {
@@ -762,110 +870,148 @@ export class CubeEngine {
     this.mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
   }
 
+  private normalToFace(normal: THREE.Vector3): Face {
+    if (normal.y > 0.5) return 'U';
+    if (normal.y < -0.5) return 'D';
+    if (normal.x > 0.5) return 'R';
+    if (normal.x < -0.5) return 'L';
+    if (normal.z > 0.5) return 'F';
+    return 'B';
+  }
+
+  private faceToNormal(face: Face): THREE.Vector3 {
+    switch (face) {
+      case 'U': return new THREE.Vector3(0, 1, 0);
+      case 'D': return new THREE.Vector3(0, -1, 0);
+      case 'R': return new THREE.Vector3(1, 0, 0);
+      case 'L': return new THREE.Vector3(-1, 0, 0);
+      case 'F': return new THREE.Vector3(0, 0, 1);
+      case 'B': return new THREE.Vector3(0, 0, -1);
+    }
+  }
+
   /**
-   * Converts 2D screen drag on a cubie face into corresponding 3D Singmaster move
-   * Supports all 6 faces (U, D, L, R, F, B), center pieces (direct face rotation),
-   * and edge/corner pieces (layer rotation).
+   * True 3D camera-invariant & cube-state-invariant drag resolver.
+   * Uses the sticker's current world normal, projects world tangent axes into screen space,
+   * and computes physical rotational torque (N × D) to guarantee intuitive turns from any view.
    */
-  public determineMoveFromDrag(sticker: THREE.Mesh, deltaX: number, deltaY: number): Move | null {
+  public determineMoveFromDrag(
+    sticker: THREE.Mesh,
+    deltaX: number,
+    deltaY: number,
+    hitPoint?: THREE.Vector3
+  ): Move | null {
     if (this.isAnimating) return null;
 
     const initialFace = sticker.userData.initialFace as Face;
-    const isCenter = sticker.userData.isCenter as boolean;
+    const isCenter = Boolean(sticker.userData.isCenter);
     const cubie = sticker.userData.cubie as THREE.Mesh;
-    const pos = cubie.position;
+    const pos = cubie.position.clone().round();
+
+    // 1. Determine current world-space outward normal of the touched sticker
+    let worldNormal: THREE.Vector3;
+    if (sticker.parent) {
+      sticker.updateMatrixWorld(true);
+      worldNormal = new THREE.Vector3(0, 0, 1).transformDirection(sticker.matrixWorld).round();
+    } else {
+      // Fallback for unit-test mocks without scene graph attachment
+      worldNormal = this.faceToNormal(initialFace);
+    }
+
+    // Active camera (with HOME camera fallback for headless unit tests)
+    const cam = this.camera || (() => {
+      const c = new THREE.PerspectiveCamera(44, 16 / 9, 0.1, 100);
+      c.position.set(3.6, 3.2, 5.8);
+      c.lookAt(0, 0, 0);
+      c.updateMatrixWorld();
+      return c;
+    })();
+    const viewW = this.renderer?.domElement.clientWidth || 800;
+    const viewH = this.renderer?.domElement.clientHeight || 450;
 
     const absX = Math.abs(deltaX);
     const absY = Math.abs(deltaY);
+    if (absX < 1 && absY < 1) return null;
 
-    // 1. Center piece drag: Directly rotates the face itself!
+    const activeFace = this.normalToFace(worldNormal);
+    const worldHit = hitPoint ? hitPoint.clone() : pos.clone().addScaledVector(worldNormal, 0.5);
+
+    // 2. Center sticker: rotates its physical face directly (using circular torque around center or swipe)
     if (isCenter) {
-      switch (initialFace) {
-        case 'F':
-          return (deltaX > 0 || (absY > absX && deltaY < 0)) ? 'F' : "F'";
-        case 'B':
-          return (deltaX < 0 || (absY > absX && deltaY < 0)) ? 'B' : "B'";
-        case 'R':
-          return (deltaX > 0 || (absY > absX && deltaY < 0)) ? 'R' : "R'";
-        case 'L':
-          return (deltaX < 0 || (absY > absX && deltaY < 0)) ? 'L' : "L'";
-        case 'U':
-          return (deltaX > 0 || (absY > absX && deltaY < 0)) ? 'U' : "U'";
-        case 'D':
-          return (deltaX > 0 || (absY > absX && deltaY > 0)) ? 'D' : "D'";
+      let isCW = absX >= absY ? deltaX > 0 : deltaY < 0;
+
+      if (hitPoint) {
+        const faceCenterWorld = worldNormal.clone().multiplyScalar(1.5);
+        const cNdc = faceCenterWorld.project(cam);
+        const hNdc = worldHit.clone().project(cam);
+        const rx = (hNdc.x - cNdc.x) * viewW * 0.5;
+        const ry = -(hNdc.y - cNdc.y) * viewH * 0.5;
+        if (Math.hypot(rx, ry) >= 8) {
+          // 2D screen torque (clockwise > 0 in screen coords with Y down)
+          const torque = rx * deltaY - ry * deltaX;
+          isCW = torque > 0;
+        }
+      }
+
+      return (isCW ? activeFace : `${activeFace}'`) as Move;
+    }
+
+    // 3. Edge & Corner stickers: Project the two 3D face tangent axes into screen space
+    let axisA: THREE.Vector3;
+    let axisB: THREE.Vector3;
+    if (Math.abs(worldNormal.x) > 0.5) {
+      axisA = new THREE.Vector3(0, 0, 1);
+      axisB = new THREE.Vector3(0, 1, 0);
+    } else if (Math.abs(worldNormal.y) > 0.5) {
+      axisA = new THREE.Vector3(1, 0, 0);
+      axisB = new THREE.Vector3(0, 0, 1);
+    } else {
+      axisA = new THREE.Vector3(1, 0, 0);
+      axisB = new THREE.Vector3(0, 1, 0);
+    }
+
+    const projectAxisToScreen = (axis: THREE.Vector3): THREE.Vector2 => {
+      const p0 = worldHit.clone().project(cam);
+      const p1 = worldHit.clone().add(axis).project(cam);
+      const vec = new THREE.Vector2((p1.x - p0.x) * viewW * 0.5, -(p1.y - p0.y) * viewH * 0.5);
+      return vec.lengthSq() > 1e-6 ? vec.normalize() : new THREE.Vector2(axis.x, -axis.y);
+    };
+
+    const scrA = projectAxisToScreen(axisA);
+    const scrB = projectAxisToScreen(axisB);
+    const drag2D = new THREE.Vector2(deltaX, deltaY).normalize();
+
+    const dotA = drag2D.dot(scrA);
+    const dotB = drag2D.dot(scrB);
+
+    const candidates = [
+      { axis: axisA, dot: dotA },
+      { axis: axisB, dot: dotB },
+    ].sort((a, b) => Math.abs(b.dot) - Math.abs(a.dot));
+
+    // Try primary drag axis; if it hits middle slice (coord === 0), vector-snap to secondary if strong enough
+    for (let idx = 0; idx < candidates.length; idx++) {
+      const cand = candidates[idx];
+      if (idx === 1 && Math.abs(cand.dot) < 0.28) break;
+
+      const dragWorld = cand.axis.clone().multiplyScalar(cand.dot >= 0 ? 1 : -1);
+      const omega = new THREE.Vector3().crossVectors(worldNormal, dragWorld).round();
+
+      if (Math.abs(omega.y) > 0.5) {
+        if (pos.y > 0.5) return omega.y < 0 ? 'U' : "U'";
+        if (pos.y < -0.5) return omega.y > 0 ? 'D' : "D'";
+      } else if (Math.abs(omega.x) > 0.5) {
+        if (pos.x > 0.5) return omega.x < 0 ? 'R' : "R'";
+        if (pos.x < -0.5) return omega.x > 0 ? 'L' : "L'";
+      } else if (Math.abs(omega.z) > 0.5) {
+        if (pos.z > 0.5) return omega.z < 0 ? 'F' : "F'";
+        if (pos.z < -0.5) return omega.z > 0 ? 'B' : "B'";
       }
     }
 
-    // 2. Non-center pieces (edges & corners)
-    switch (initialFace) {
-      case 'F':
-        if (absX > absY) {
-          if (pos.y > 0.3) return deltaX > 0 ? "U'" : 'U';
-          if (pos.y < -0.3) return deltaX > 0 ? 'D' : "D'";
-          return deltaX > 0 ? 'F' : "F'";
-        } else {
-          if (pos.x > 0.3) return deltaY < 0 ? 'R' : "R'";
-          if (pos.x < -0.3) return deltaY > 0 ? 'L' : "L'";
-          return deltaY < 0 ? 'F' : "F'";
-        }
-
-      case 'B':
-        if (absX > absY) {
-          if (pos.y > 0.3) return deltaX > 0 ? 'U' : "U'";
-          if (pos.y < -0.3) return deltaX > 0 ? "D'" : 'D';
-          return deltaX < 0 ? 'B' : "B'";
-        } else {
-          if (pos.x > 0.3) return deltaY < 0 ? "R'" : 'R';
-          if (pos.x < -0.3) return deltaY > 0 ? "L'" : 'L';
-          return deltaY < 0 ? 'B' : "B'";
-        }
-
-      case 'R':
-        if (absX > absY) {
-          if (pos.y > 0.3) return deltaX > 0 ? 'U' : "U'";
-          if (pos.y < -0.3) return deltaX > 0 ? "D'" : 'D';
-          return deltaX > 0 ? 'R' : "R'";
-        } else {
-          if (pos.z > 0.3) return deltaY < 0 ? 'F' : "F'";
-          if (pos.z < -0.3) return deltaY > 0 ? 'B' : "B'";
-          return deltaY < 0 ? 'R' : "R'";
-        }
-
-      case 'L':
-        if (absX > absY) {
-          if (pos.y > 0.3) return deltaX > 0 ? "U'" : 'U';
-          if (pos.y < -0.3) return deltaX > 0 ? 'D' : "D'";
-          return deltaX < 0 ? 'L' : "L'";
-        } else {
-          if (pos.z > 0.3) return deltaY < 0 ? "F'" : 'F';
-          if (pos.z < -0.3) return deltaY > 0 ? "B'" : 'B';
-          return deltaY < 0 ? 'L' : "L'";
-        }
-
-      case 'U':
-        if (absX > absY) {
-          if (pos.z > 0.3) return deltaX > 0 ? 'F' : "F'";
-          if (pos.z < -0.3) return deltaX > 0 ? "B'" : 'B';
-          return deltaX > 0 ? 'U' : "U'";
-        } else {
-          if (pos.x > 0.3) return deltaY < 0 ? 'R' : "R'";
-          if (pos.x < -0.3) return deltaY > 0 ? 'L' : "L'";
-          return deltaY < 0 ? 'U' : "U'";
-        }
-
-      case 'D':
-        if (absX > absY) {
-          if (pos.z > 0.3) return deltaX > 0 ? "F'" : 'F';
-          if (pos.z < -0.3) return deltaX > 0 ? 'B' : "B'";
-          return deltaX > 0 ? 'D' : "D'";
-        } else {
-          if (pos.x > 0.3) return deltaY < 0 ? "R'" : 'R';
-          if (pos.x < -0.3) return deltaY > 0 ? "L'" : 'L';
-          return deltaY > 0 ? 'D' : "D'";
-        }
-    }
-
-    return null;
+    // Fallback when swiping inward across a non-corner edge: rotate the face itself smoothly
+    const isCW = absX >= absY ? deltaX > 0 : deltaY < 0;
+    return (isCW ? activeFace : `${activeFace}'`) as Move;
   }
 
   public handleResize(): void {
@@ -923,8 +1069,22 @@ export class CubeEngine {
 
   public destroy(): void {
     this.cancelAnimations();
+    this.hideTutorGuide();
     if (this.animFrameId) cancelAnimationFrame(this.animFrameId);
     if (this.resizeObserver) this.resizeObserver.disconnect();
+    if (this.boundOnPointerMove) window.removeEventListener('pointermove', this.boundOnPointerMove);
+    if (this.boundOnPointerUp) {
+      window.removeEventListener('pointerup', this.boundOnPointerUp);
+      window.removeEventListener('pointercancel', this.boundOnPointerUp);
+    }
+    this.cubies.forEach((c) => c.geometry?.dispose());
+    this.cubeBodyMat?.dispose();
+    this.stickerMeshes.forEach((s) => {
+      if (s) {
+        s.geometry?.dispose();
+        (s.material as THREE.Material)?.dispose();
+      }
+    });
     this.controls.dispose();
     this.renderer.dispose();
     if (this.renderer.domElement.parentElement) {

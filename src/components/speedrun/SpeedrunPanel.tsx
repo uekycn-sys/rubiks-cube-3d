@@ -19,7 +19,6 @@ export const SpeedrunPanel: React.FC<SpeedrunPanelProps> = ({ engine, onAlignCam
   const [scrambleString, setScrambleString] = useState<string>('');
   const [pbTimeMs, setPbTimeMs] = useState<number | null>(null);
   const [historyRecords, setHistoryRecords] = useState<number[]>([]);
-  const [isMuted, setIsMuted] = useState(soundManager.getMuted());
   const [selectedPattern, setSelectedPattern] = useState<string>('');
   const [isAiDemoRunning, setIsAiDemoRunning] = useState(false);
 
@@ -27,12 +26,18 @@ export const SpeedrunPanel: React.FC<SpeedrunPanelProps> = ({ engine, onAlignCam
   const timerRafRef = useRef<number | null>(null);
   const holdStartTimeRef = useRef(0);
   const aiDemoSessionRef = useRef(0);
+  const isAiDemoRef = useRef(false);
+  const pbTimeRef = useRef<number | null>(null);
 
   // Load PB & History from localStorage
   useEffect(() => {
     if (typeof localStorage !== 'undefined') {
       const savedPb = localStorage.getItem('cube_pb_ms');
-      if (savedPb) setPbTimeMs(parseInt(savedPb, 10));
+      if (savedPb) {
+        const parsed = parseInt(savedPb, 10);
+        setPbTimeMs(parsed);
+        pbTimeRef.current = parsed;
+      }
 
       const savedHistory = localStorage.getItem('cube_timer_history');
       if (savedHistory) {
@@ -71,8 +76,9 @@ export const SpeedrunPanel: React.FC<SpeedrunPanelProps> = ({ engine, onAlignCam
 
     // Update PB & History
     if (typeof localStorage !== 'undefined') {
-      const currentPb = pbTimeMs;
+      const currentPb = pbTimeRef.current;
       if (!currentPb || finalMs < currentPb) {
+        pbTimeRef.current = finalMs;
         setPbTimeMs(finalMs);
         localStorage.setItem('cube_pb_ms', String(finalMs));
       }
@@ -85,7 +91,7 @@ export const SpeedrunPanel: React.FC<SpeedrunPanelProps> = ({ engine, onAlignCam
     }
 
     soundManager.playVictory();
-  }, [pbTimeMs]);
+  }, []);
 
   // Hook into engine move complete to update turn count and check solved
   useEffect(() => {
@@ -94,6 +100,7 @@ export const SpeedrunPanel: React.FC<SpeedrunPanelProps> = ({ engine, onAlignCam
     const originalCallback = engine.callbacks.onMoveComplete;
     engine.callbacks.onMoveComplete = (move, remaining) => {
       originalCallback?.(move, remaining);
+      if (isAiDemoRef.current) return;
 
       setTurnCount((prev) => prev + 1);
 
@@ -117,7 +124,7 @@ export const SpeedrunPanel: React.FC<SpeedrunPanelProps> = ({ engine, onAlignCam
   // Spacebar timer handling
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) return;
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement).tagName)) return;
 
       if (e.code === 'Space') {
         e.preventDefault();
@@ -158,33 +165,35 @@ export const SpeedrunPanel: React.FC<SpeedrunPanelProps> = ({ engine, onAlignCam
     };
   }, [timerStatus, stopTimer]);
 
-  // Generate and apply Scramble
+  // Generate and apply Scramble cleanly in 0ms
   const handleScramble = (length: number) => {
     if (!engine) return;
+    aiDemoSessionRef.current++;
+    isAiDemoRef.current = false;
+    setIsAiDemoRunning(false);
+    setSelectedPattern('');
 
     const moves = CubeState.generateScramble(length);
     setScrambleString(moves.join(' '));
 
-    engine.setStateFromFacelets('UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB');
-    for (const m of moves) {
-      engine.applyMove(m, 100); // Instant setup
-    }
+    engine.applyMovesInstant(moves, true);
 
     setElapsedMs(0);
     setTurnCount(0);
     setTimerStatus('idle');
   };
 
-  // Apply Art Pattern
+  // Apply Art Pattern cleanly in 0ms
   const handleApplyPattern = (pattern: PatternConfig) => {
     if (!engine) return;
+    aiDemoSessionRef.current++;
+    isAiDemoRef.current = false;
+    setIsAiDemoRunning(false);
+
     setSelectedPattern(pattern.id);
     setScrambleString(pattern.moves.join(' '));
 
-    engine.setStateFromFacelets('UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB');
-    for (const m of pattern.moves) {
-      engine.applyMove(m, 100);
-    }
+    engine.applyMovesInstant(pattern.moves, true);
 
     setElapsedMs(0);
     setTurnCount(0);
@@ -195,11 +204,11 @@ export const SpeedrunPanel: React.FC<SpeedrunPanelProps> = ({ engine, onAlignCam
   const handleResetSolved = () => {
     if (!engine) return;
     aiDemoSessionRef.current++;
+    isAiDemoRef.current = false;
     setIsAiDemoRunning(false);
-    engine.cancelAnimations();
-    engine.hideTutorGuide();
+    setSelectedPattern('');
+    engine.applyMovesInstant([], true);
 
-    engine.setStateFromFacelets('UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB');
     setElapsedMs(0);
     setTurnCount(0);
     setTimerStatus('idle');
@@ -210,6 +219,7 @@ export const SpeedrunPanel: React.FC<SpeedrunPanelProps> = ({ engine, onAlignCam
   const handleCallAiTutor = async () => {
     if (!engine) return;
     aiDemoSessionRef.current++;
+    isAiDemoRef.current = false;
     setIsAiDemoRunning(false);
     engine.cancelAnimations();
 
@@ -229,6 +239,7 @@ export const SpeedrunPanel: React.FC<SpeedrunPanelProps> = ({ engine, onAlignCam
 
     if (isAiDemoRunning) {
       aiDemoSessionRef.current++;
+      isAiDemoRef.current = false;
       setIsAiDemoRunning(false);
       engine.cancelAnimations();
       engine.hideTutorGuide();
@@ -236,6 +247,7 @@ export const SpeedrunPanel: React.FC<SpeedrunPanelProps> = ({ engine, onAlignCam
     }
 
     const sessionId = ++aiDemoSessionRef.current;
+    isAiDemoRef.current = true;
     setIsAiDemoRunning(true);
 
     try {
@@ -257,6 +269,7 @@ export const SpeedrunPanel: React.FC<SpeedrunPanelProps> = ({ engine, onAlignCam
     } finally {
       engine.hideTutorGuide();
       if (aiDemoSessionRef.current === sessionId) {
+        isAiDemoRef.current = false;
         setIsAiDemoRunning(false);
       }
     }
@@ -266,6 +279,7 @@ export const SpeedrunPanel: React.FC<SpeedrunPanelProps> = ({ engine, onAlignCam
   useEffect(() => {
     return () => {
       aiDemoSessionRef.current++;
+      isAiDemoRef.current = false;
       engine?.cancelAnimations();
     };
   }, [engine]);
@@ -338,28 +352,28 @@ export const SpeedrunPanel: React.FC<SpeedrunPanelProps> = ({ engine, onAlignCam
         <button
           type="button"
           onClick={() => handleScramble(6)}
-          className="py-2.5 px-3 rounded-xl glass-button text-slate-200 font-semibold hover:text-white flex items-center justify-center gap-1.5"
+          className="py-2.5 px-2 rounded-xl glass-button text-slate-200 font-semibold hover:text-white flex items-center justify-center gap-1 whitespace-nowrap cursor-pointer"
         >
           <span>🌱</span>
-          <span>入门打乱 (6步)</span>
+          <span>入门(6步)</span>
         </button>
 
         <button
           type="button"
           onClick={() => handleScramble(12)}
-          className="py-2.5 px-3 rounded-xl glass-button text-slate-200 font-semibold hover:text-white flex items-center justify-center gap-1.5"
+          className="py-2.5 px-2 rounded-xl glass-button text-slate-200 font-semibold hover:text-white flex items-center justify-center gap-1 whitespace-nowrap cursor-pointer"
         >
           <span>⚡</span>
-          <span>标准打乱 (12步)</span>
+          <span>标准(12步)</span>
         </button>
 
         <button
           type="button"
           onClick={() => handleScramble(20)}
-          className="py-2.5 px-3 rounded-xl glass-button text-sky-300 font-bold hover:text-white flex items-center justify-center gap-1.5 border-sky-500/30"
+          className="py-2.5 px-2 rounded-xl glass-button text-sky-300 font-bold hover:text-white flex items-center justify-center gap-1 border-sky-500/30 whitespace-nowrap cursor-pointer"
         >
           <span>🏆</span>
-          <span>WCA打乱 (20步)</span>
+          <span>WCA(20步)</span>
         </button>
       </div>
 
@@ -368,7 +382,7 @@ export const SpeedrunPanel: React.FC<SpeedrunPanelProps> = ({ engine, onAlignCam
         <div className="text-[11px] text-slate-400 font-medium">
           一键生成艺术花式图案：
         </div>
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
           {PATTERNS.map((p) => (
             <button
               key={p.id}
@@ -400,22 +414,10 @@ export const SpeedrunPanel: React.FC<SpeedrunPanelProps> = ({ engine, onAlignCam
           <button
             type="button"
             onClick={() => onAlignCamera('HOME')}
-            className="px-2.5 py-1.5 rounded-lg glass-button text-sky-300"
+            className="px-2.5 py-1.5 rounded-lg glass-button text-sky-300 cursor-pointer"
             title="一键回正标准白顶绿前视角"
           >
             回正 🏠
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              const muted = soundManager.toggleMute();
-              setIsMuted(muted);
-            }}
-            className="px-2.5 py-1.5 rounded-lg glass-button text-slate-300"
-            title="静音开关"
-          >
-            {isMuted ? '🔇' : '🔊'}
           </button>
         </div>
 

@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useCubeStore } from '../../store/useCubeStore';
 import { store } from '../../store/cubeStore';
 import { CubeEngine } from '../../engine/CubeEngine';
+import { CubeState } from '../../core/cubeState';
+import { solveCube } from '../../core/solverService';
 import { TutorCompletionModal } from './TutorCompletionModal';
 
 interface TutorControlPanelProps {
@@ -28,16 +30,30 @@ export const TutorControlPanel: React.FC<TutorControlPanelProps> = ({
   const [isPlaying, setIsPlaying] = useState(false);
   const [activePlayType, setActivePlayType] = useState<'continuous' | 'followAlong'>('continuous');
   const [isExecutingSingleMove, setIsExecutingSingleMove] = useState(false);
+  const [isGeneratingDemo, setIsGeneratingDemo] = useState(false);
 
   // Playback Session Lock & Version Token (prevents React closure race conditions)
   const playSessionIdRef = useRef(0);
   const isPlayingRef = useRef(false);
+  const pauseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pauseResolverRef = useRef<(() => void) | null>(null);
 
   const timelineScrollRef = useRef<HTMLDivElement>(null);
   const capsuleRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   const totalSteps = solutionMoves.length;
   const currentInstruction = instructions[currentStepIndex];
+
+  // Abortable sleep helper for follow-along pauses
+  const waitAbortable = (ms: number) =>
+    new Promise<void>((resolve) => {
+      pauseResolverRef.current = resolve;
+      pauseTimerRef.current = setTimeout(() => {
+        pauseTimerRef.current = null;
+        pauseResolverRef.current = null;
+        resolve();
+      }, ms);
+    });
 
   // 1. Align 3D guide arrow to current step
   useEffect(() => {
@@ -59,11 +75,20 @@ export const TutorControlPanel: React.FC<TutorControlPanelProps> = ({
     }
   }, [currentStepIndex]);
 
-  // 3. Stop playback safely
+  // 3. Stop playback safely & clear pending wait timers immediately
   const stopPlayback = useCallback(() => {
     playSessionIdRef.current++;
     isPlayingRef.current = false;
     setIsPlaying(false);
+    if (pauseTimerRef.current) {
+      clearTimeout(pauseTimerRef.current);
+      pauseTimerRef.current = null;
+    }
+    if (pauseResolverRef.current) {
+      const resolve = pauseResolverRef.current;
+      pauseResolverRef.current = null;
+      resolve();
+    }
     engine?.cancelAnimations();
   }, [engine]);
 
@@ -121,10 +146,10 @@ export const TutorControlPanel: React.FC<TutorControlPanelProps> = ({
           break;
         }
 
-        // Pause before next step
+        // Pause before next step (abortable immediately on Pause)
         const pauseMs = type === 'continuous' ? 120 : waitInterval;
         if (pauseMs > 0) {
-          await new Promise((resolve) => setTimeout(resolve, pauseMs));
+          await waitAbortable(pauseMs);
         }
       }
 
@@ -243,9 +268,62 @@ export const TutorControlPanel: React.FC<TutorControlPanelProps> = ({
     return () => {
       playSessionIdRef.current++;
       isPlayingRef.current = false;
+      if (pauseTimerRef.current) clearTimeout(pauseTimerRef.current);
+      if (pauseResolverRef.current) pauseResolverRef.current();
       engine?.cancelAnimations();
     };
   }, [engine]);
+
+  // Quick-launch AI Tutor with a fresh 20-move scramble when no puzzle is loaded
+  const handleStartSampleTutor = async () => {
+    if (isGeneratingDemo) return;
+    setIsGeneratingDemo(true);
+    try {
+      const scramble = CubeState.generateScramble(20);
+      const sim = new CubeState();
+      sim.applyMoves(scramble);
+      const facelets = sim.getFacelets();
+      const solution = await solveCube(facelets);
+      store.setupTutor(facelets, solution);
+    } catch (err) {
+      console.error('Failed to generate sample tutor:', err);
+    } finally {
+      setIsGeneratingDemo(false);
+    }
+  };
+
+  if (totalSteps === 0 && !isTutorFinished) {
+    return (
+      <div className="flex flex-col gap-4 w-full select-none p-2">
+        <div className="rounded-2xl bg-gradient-to-br from-slate-900/90 via-slate-900/80 to-sky-950/50 p-5 border border-sky-400/30 text-center flex flex-col items-center gap-3 shadow-xl">
+          <div className="w-12 h-12 rounded-2xl bg-sky-500/20 border border-sky-400/40 flex items-center justify-center text-2xl">
+            ✨
+          </div>
+          <h3 className="text-base font-bold text-white">AI 手把手慢速教学引擎</h3>
+          <p className="text-xs text-slate-300 leading-relaxed">
+            支持任意真实打乱魔方！AI 通过两阶段 Kociemba 算法算出约 18–22 步最优解，并同步亮青光外框与双侧 3D 弧形箭头手把手教您拧完。
+          </p>
+          <div className="flex flex-col gap-2.5 w-full mt-2">
+            <button
+              type="button"
+              onClick={handleStartSampleTutor}
+              disabled={isGeneratingDemo}
+              className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-sky-500 via-cyan-400 to-emerald-400 text-slate-950 font-bold text-xs tracking-wide shadow-lg hover:brightness-110 transition-all cursor-pointer disabled:opacity-60"
+            >
+              {isGeneratingDemo ? '正在生成与计算最优解...' : '🎲 随机生成 20 步打乱，立即体验 AI 教学'}
+            </button>
+            <button
+              type="button"
+              onClick={() => store.setState({ mode: 'paint' })}
+              className="w-full py-2.5 px-4 rounded-xl glass-button text-sky-300 hover:text-white text-xs font-semibold cursor-pointer"
+            >
+              📸 去实景录入自己手中的魔方
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -313,7 +391,7 @@ export const TutorControlPanel: React.FC<TutorControlPanelProps> = ({
             <div className="mt-3 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
               <span className="flex items-center gap-1 text-sky-300">
                 <span>💡 指引：</span>
-                <span>请看 3D 绿色发光外层与动态方向箭头跟随转动</span>
+                <span>请看 3D 霓虹亮青发光外层与双向弧形箭头跟随转动</span>
               </span>
             </div>
           </div>
@@ -498,7 +576,7 @@ export const TutorControlPanel: React.FC<TutorControlPanelProps> = ({
       </div>
 
       {/* Completion Celebration Modal */}
-      {isTutorFinished && (
+      {isTutorFinished && totalSteps > 0 && (
         <TutorCompletionModal
           totalSteps={totalSteps}
           onRestartPaint={() => {

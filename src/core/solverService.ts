@@ -5,6 +5,7 @@
  */
 
 import { Move } from './types';
+import { findExactShortSolution } from './exactSolver';
 // @ts-ignore
 import Cube from 'cubejs';
 
@@ -86,6 +87,12 @@ export async function solveCube(facelets: string): Promise<Move[]> {
   // If already solved, return empty array immediately
   if (facelets === 'UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB') {
     return [];
+  }
+
+  // Exact optimal shortest solver for <= 8-move states
+  const exactShort = findExactShortSolution(facelets, 8);
+  if (exactShort !== null) {
+    return exactShort;
   }
 
   if (isBrowser) {

@@ -33,7 +33,7 @@ export const QuickTurnBar: React.FC<QuickTurnBarProps> = ({ engine }) => {
 
       {/* Expanded Button Rows */}
       {isExpanded && (
-        <div className="mt-2 p-2 rounded-2xl glass-panel border border-sky-500/20 shadow-2xl flex items-center gap-3 animate-fade-in">
+        <div className="mt-2 p-2 rounded-2xl glass-panel border border-sky-500/20 shadow-2xl flex flex-wrap items-center justify-center gap-2 sm:gap-3 max-w-[calc(100vw-2rem)] animate-fade-in">
           {MOVE_GROUPS.map((group) => (
             <div key={group.name} className="flex items-center gap-1">
               {group.moves.map((move) => (
@@ -41,7 +41,7 @@ export const QuickTurnBar: React.FC<QuickTurnBarProps> = ({ engine }) => {
                   key={move}
                   type="button"
                   onClick={() => handleTurn(move)}
-                  className="w-8 h-8 rounded-lg glass-button font-mono font-bold text-xs text-slate-200 hover:text-sky-300 hover:bg-sky-500/20 hover:border-sky-400/40 flex items-center justify-center transition-all cursor-pointer active:scale-95"
+                  className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg glass-button font-mono font-bold text-xs text-slate-200 hover:text-sky-300 hover:bg-sky-500/20 hover:border-sky-400/40 flex items-center justify-center transition-all cursor-pointer active:scale-95"
                 >
                   {move}
                 </button>

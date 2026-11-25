@@ -5,6 +5,7 @@
 
 // @ts-ignore
 import Cube from 'cubejs';
+import { findExactShortSolution } from './exactSolver';
 
 let initialized = false;
 
@@ -26,6 +27,18 @@ self.onmessage = function (event: MessageEvent) {
 
   if (type === 'SOLVE') {
     try {
+      // Check fast exact optimal solution (<= 8 moves) via Meet-in-the-Middle first
+      const exactShort = findExactShortSolution(facelets, 8);
+      if (exactShort !== null) {
+        self.postMessage({
+          type: 'SOLVE_SUCCESS',
+          id,
+          moves: exactShort,
+          raw: exactShort.join(' '),
+        });
+        return;
+      }
+
       if (!initialized) {
         Cube.initSolver();
         initialized = true;

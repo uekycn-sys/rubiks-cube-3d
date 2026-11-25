@@ -5,6 +5,7 @@ import { NetEditor } from './NetEditor';
 import { PaintPalette } from './PaintPalette';
 import { solveCube } from '../../core/solverService';
 import { Face } from '../../core/types';
+import { soundManager } from '../../audio/SoundManager';
 
 interface RealCubePaintPanelProps {
   onAlignCamera: (view: any) => void;
@@ -20,6 +21,7 @@ export const RealCubePaintPanel: React.FC<RealCubePaintPanelProps> = ({
 
   const handleFaceletClick = (index: number) => {
     store.setPaintFacelet(index, selectedPaintColor);
+    soundManager.playPaint();
   };
 
   const handleSelectColor = (color: Face | 'X') => {
@@ -46,40 +48,39 @@ export const RealCubePaintPanel: React.FC<RealCubePaintPanelProps> = ({
   };
 
   return (
-    <div className="flex flex-col gap-3 w-full select-none">
+    <div className="flex flex-col gap-2.5 w-full select-none pb-2">
       {/* 1. Benchmark Holding Orientation Card */}
-      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-sky-900/40 via-blue-900/30 to-indigo-900/40 border border-sky-400/30 p-3.5 mb-3 shadow-lg">
-        <div className="flex items-start gap-3">
-          <div className="w-9 h-9 rounded-xl bg-sky-500/20 border border-sky-400/40 flex items-center justify-center shrink-0 text-lg shadow-inner">
+      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-sky-900/40 via-blue-900/30 to-indigo-900/40 border border-sky-400/30 p-3 shadow-lg">
+        <div className="flex items-start gap-2.5">
+          <div className="w-8 h-8 rounded-xl bg-sky-500/20 border border-sky-400/40 flex items-center justify-center shrink-0 text-base shadow-inner">
             🧭
           </div>
           <div className="flex-1 text-xs leading-relaxed text-slate-200">
-            <span className="font-semibold text-sky-300 block mb-0.5 text-sm">
-              手持魔方基准方向（极为关键）：
+            <span className="font-semibold text-sky-300 block mb-0.5 text-xs">
+              手持魔方基准方向：
+              <strong className="text-white ml-1">白顶(U)</strong> ·{' '}
+              <strong className="text-emerald-400">绿前(F)</strong> ·{' '}
+              <strong className="text-rose-400">红右(R)</strong>
             </span>
-            <div className="text-slate-300">
-              请拿好手中的魔方：<strong className="text-white">白色中心朝上 ⬆️</strong>，
-              <strong className="text-emerald-400">绿色中心正对自己 👀</strong>
-              <div className="text-[11px] text-slate-400 mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
-                <span>右侧为 <strong className="text-rose-400">红色(R)</strong></span>
-                <span>左侧为 <strong className="text-amber-500">橙色(L)</strong></span>
-                <span>底面为 <strong className="text-yellow-400">黄色(D)</strong></span>
-                <span>背面为 <strong className="text-blue-400">蓝色(B)</strong></span>
-              </div>
+            <div className="text-[11px] text-slate-400 flex flex-wrap gap-x-2.5 gap-y-0.5">
+              <span>左：<strong className="text-amber-500">橙(L)</strong></span>
+              <span>底：<strong className="text-yellow-400">黄(D)</strong></span>
+              <span>背：<strong className="text-blue-400">蓝(B)</strong></span>
+              <span className="text-slate-500">• 支持直接在左侧 3D 魔方上点选涂色</span>
             </div>
           </div>
         </div>
       </div>
 
       {/* 2. Camera Align Quick Buttons on 3D Area */}
-      <div className="flex items-center justify-between px-2 py-1 mb-2 text-xs text-slate-400">
-        <span className="font-medium text-slate-300 flex items-center gap-1.5">
-          <span>📷 照着实物逐面对齐：</span>
+      <div className="flex items-center justify-between px-1 text-xs text-slate-400">
+        <span className="font-medium text-slate-300 text-[11px] whitespace-nowrap">
+          📷 逐面视角对齐：
         </span>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 flex-wrap justify-end">
           <button
             onClick={() => onAlignCamera('HOME')}
-            className="px-2 py-1 rounded glass-button text-sky-300 text-[11px] font-medium"
+            className="px-2 py-1 rounded glass-button text-sky-300 text-[11px] font-medium cursor-pointer"
             title="一键回正标准视角"
           >
             回正 🏠
@@ -88,7 +89,7 @@ export const RealCubePaintPanel: React.FC<RealCubePaintPanelProps> = ({
             <button
               key={view}
               onClick={() => onAlignCamera(view)}
-              className="px-1.5 py-1 rounded glass-button text-slate-300 hover:text-white text-[10px]"
+              className="px-1.5 py-1 rounded glass-button text-slate-300 hover:text-white text-[10px] cursor-pointer"
             >
               {view === 'TOP' ? '顶' : view === 'FRONT' ? '前' : view === 'RIGHT' ? '右' : view === 'BOTTOM' ? '底' : view === 'LEFT' ? '左' : '后'}
             </button>
@@ -97,13 +98,13 @@ export const RealCubePaintPanel: React.FC<RealCubePaintPanelProps> = ({
       </div>
 
       {/* 3. 2D Net Unfolded Editor */}
-      <div className="bg-slate-950/60 rounded-2xl border border-slate-800/80 p-2 mb-3 shadow-inner">
-        <div className="flex items-center justify-between px-2 pt-1 pb-2 border-b border-slate-800 text-xs">
-          <span className="text-slate-300 font-medium flex items-center gap-1.5">
-            <span>2D 展开十字图（与 3D 双向同步）：</span>
+      <div className="bg-slate-950/60 rounded-2xl border border-slate-800/80 p-2 shadow-inner">
+        <div className="flex items-center justify-between px-1.5 pt-0.5 pb-1.5 border-b border-slate-800 text-[11px]">
+          <span className="text-slate-300 font-medium">
+            2D 展开十字图（3D 双向同步）
           </span>
-          <span className="text-[11px] text-slate-400">
-            点击小格上色 • 中心块锁定保护
+          <span className="text-[10px] text-slate-400">
+            点击小格上色 • 中心锁定
           </span>
         </div>
         <NetEditor
@@ -114,7 +115,7 @@ export const RealCubePaintPanel: React.FC<RealCubePaintPanelProps> = ({
       </div>
 
       {/* 4. Palette & Quick Tools */}
-      <div className="bg-slate-900/60 rounded-2xl border border-slate-800 p-3 mb-3">
+      <div className="bg-slate-900/60 rounded-2xl border border-slate-800 p-2.5">
         <PaintPalette
           selectedColor={selectedPaintColor}
           facelets={paintFacelets}
