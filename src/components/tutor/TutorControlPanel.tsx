@@ -4,6 +4,8 @@ import { store } from '../../store/cubeStore';
 import { CubeEngine } from '../../engine/CubeEngine';
 import { CubeState } from '../../core/cubeState';
 import { solveCube } from '../../core/solverService';
+import { LBL_STAGES, solveLBL } from '../../core/lblSolver';
+import { LblStageId, SolverMethod } from '../../core/types';
 import { TutorCompletionModal } from './TutorCompletionModal';
 
 interface TutorControlPanelProps {
@@ -18,6 +20,9 @@ export const TutorControlPanel: React.FC<TutorControlPanelProps> = ({
   onGoToLevels,
 }) => {
   const {
+    solverMethod,
+    lblSolution,
+    initialTutorFacelets,
     solutionMoves,
     instructions,
     currentStepIndex,
@@ -275,18 +280,45 @@ export const TutorControlPanel: React.FC<TutorControlPanelProps> = ({
   }, [engine]);
 
   // Quick-launch AI Tutor with a fresh 20-move scramble when no puzzle is loaded
-  const handleStartSampleTutor = async () => {
+  const handleStartSampleTutor = async (methodOverride?: SolverMethod) => {
     if (isGeneratingDemo) return;
     setIsGeneratingDemo(true);
     try {
+      const targetMethod = methodOverride ?? solverMethod;
       const scramble = CubeState.generateScramble(20);
       const sim = new CubeState();
       sim.applyMoves(scramble);
       const facelets = sim.getFacelets();
-      const solution = await solveCube(facelets);
-      store.setupTutor(facelets, solution);
+      if (targetMethod === 'lbl') {
+        const lbl = solveLBL(facelets);
+        store.setupTutor(facelets, lbl.moves, lbl, 'lbl');
+      } else {
+        const solution = await solveCube(facelets);
+        store.setupTutor(facelets, solution, null, 'kociemba');
+      }
     } catch (err) {
       console.error('Failed to generate sample tutor:', err);
+    } finally {
+      setIsGeneratingDemo(false);
+    }
+  };
+
+  // Switch between LBL (7-stage human method) and Kociemba (~20-move AI optimal)
+  const handleSwitchMethod = async (nextMethod: SolverMethod) => {
+    if (nextMethod === solverMethod || isGeneratingDemo) return;
+    stopPlayback();
+    setIsGeneratingDemo(true);
+    try {
+      if (nextMethod === 'lbl') {
+        const lbl = solveLBL(initialTutorFacelets);
+        store.setupTutor(initialTutorFacelets, lbl.moves, lbl, 'lbl');
+      } else {
+        const solution = await solveCube(initialTutorFacelets);
+        store.setupTutor(initialTutorFacelets, solution, null, 'kociemba');
+      }
+      engine?.setStateFromFacelets(initialTutorFacelets);
+    } catch (err) {
+      console.error('Failed to switch solver method:', err);
     } finally {
       setIsGeneratingDemo(false);
     }
@@ -299,25 +331,33 @@ export const TutorControlPanel: React.FC<TutorControlPanelProps> = ({
           <div className="w-12 h-12 rounded-2xl bg-sky-500/20 border border-sky-400/40 flex items-center justify-center text-2xl">
             ✨
           </div>
-          <h3 className="text-base font-bold text-white">AI 手把手慢速教学引擎</h3>
+          <h3 className="text-base font-bold text-white">AI 分步慢速教学引擎</h3>
           <p className="text-xs text-slate-300 leading-relaxed">
-            支持任意真实打乱魔方！AI 通过两阶段 Kociemba 算法算出约 18–22 步最优解，并同步亮青光外框与双侧 3D 弧形箭头手把手教您拧完。
+            支持用「层先法（7阶段口诀，看完就能学会）」或「Kociemba 极速最优解（约20步）」分步慢速演示，并配 3D 亮青箭头手把手指导。
           </p>
-          <div className="flex flex-col gap-2.5 w-full mt-2">
+          <div className="flex flex-col gap-2 w-full mt-2">
             <button
               type="button"
-              onClick={handleStartSampleTutor}
+              onClick={() => handleStartSampleTutor('lbl')}
               disabled={isGeneratingDemo}
               className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-sky-500 via-cyan-400 to-emerald-400 text-slate-950 font-bold text-xs tracking-wide shadow-lg hover:brightness-110 transition-all cursor-pointer disabled:opacity-60"
             >
-              {isGeneratingDemo ? '正在生成与计算最优解...' : '🎲 随机生成 20 步打乱，立即体验 AI 教学'}
+              {isGeneratingDemo ? '正在生成教程...' : '🎓 生成 20 步打乱，看「层先法」完整教学'}
             </button>
             <button
               type="button"
-              onClick={() => store.setState({ mode: 'paint' })}
-              className="w-full py-2.5 px-4 rounded-xl glass-button text-sky-300 hover:text-white text-xs font-semibold cursor-pointer"
+              onClick={() => handleStartSampleTutor('kociemba')}
+              disabled={isGeneratingDemo}
+              className="w-full py-2.5 px-4 rounded-xl glass-button text-sky-300 hover:text-white text-xs font-semibold cursor-pointer disabled:opacity-60"
             >
-              📸 去实景录入自己手中的魔方
+              ⚡ 体验 Kociemba AI 极速最优解 (~20步)
+            </button>
+            <button
+              type="button"
+              onClick={() => store.setState({ mode: 'learn' })}
+              className="w-full py-2.5 px-4 rounded-xl glass-button text-emerald-300 hover:text-white text-xs font-semibold cursor-pointer"
+            >
+              🖐️ 去「层先法学院」亲手带练
             </button>
           </div>
         </div>
@@ -363,9 +403,99 @@ export const TutorControlPanel: React.FC<TutorControlPanelProps> = ({
           </div>
         </div>
 
+        {/* Method Switcher (LBL vs Kociemba) & Hand-On Practice CTA */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-1 bg-slate-950/70 p-1 rounded-xl border border-slate-800">
+            <button
+              type="button"
+              onClick={() => handleSwitchMethod('lbl')}
+              disabled={isGeneratingDemo}
+              className={`px-2 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                solverMethod === 'lbl'
+                  ? 'bg-gradient-to-r from-sky-500 to-emerald-400 text-slate-950 shadow-sm'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              🎓 层先法教学
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSwitchMethod('kociemba')}
+              disabled={isGeneratingDemo}
+              className={`px-2 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                solverMethod === 'kociemba'
+                  ? 'bg-sky-500/30 text-sky-200 border border-sky-400/50'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              ⚡ 最优解 (~20步)
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              stopPlayback();
+              const currentFacelets = historyFacelets[currentStepIndex] || initialTutorFacelets;
+              store.startLearnWithFacelets(currentFacelets);
+            }}
+            className="px-2.5 py-1.5 rounded-xl glass-button text-emerald-300 hover:text-white text-[11px] font-bold border-emerald-500/30 cursor-pointer"
+            title="停在当前画面，切换到层先法学院由你自己亲手拧完"
+          >
+            🖐️ 亲手跟练此局
+          </button>
+        </div>
+
+        {/* 7-Stage Quick Jump Pills when LBL is active */}
+        {solverMethod === 'lbl' && lblSolution && (
+          <div className="grid grid-cols-7 gap-1 bg-slate-950/60 p-1.5 rounded-xl border border-slate-800/80">
+            {LBL_STAGES.map((stage) => {
+              const startIdx = lblSolution.stageStartIndices[stage.id as LblStageId];
+              const isAvailable = startIdx !== undefined;
+              const isActiveStage = currentInstruction?.stageId === stage.id;
+              return (
+                <button
+                  key={stage.id}
+                  type="button"
+                  disabled={!isAvailable}
+                  onClick={() => {
+                    if (startIdx !== undefined) handleJumpToStep(startIdx);
+                  }}
+                  title={isAvailable ? `跳到 ${stage.name}` : `${stage.shortName}（初始已完成）`}
+                  className={`py-1 px-0.5 rounded-lg text-[10px] font-semibold transition-all truncate ${
+                    isActiveStage
+                      ? 'bg-sky-500 text-slate-950 font-bold shadow-sm cursor-pointer'
+                      : isAvailable
+                      ? 'bg-slate-900 text-slate-300 hover:bg-slate-800 hover:text-white cursor-pointer'
+                      : 'bg-emerald-500/15 text-emerald-400/80 cursor-default'
+                  }`}
+                >
+                  {isAvailable ? `${stage.id}.${stage.shortName}` : `✓${stage.shortName}`}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {/* Current Gesture Guide Card */}
         {currentInstruction && currentStepIndex < totalSteps ? (
           <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-slate-900/90 via-slate-900/80 to-sky-950/40 p-3.5 sm:p-4 border border-sky-400/30 shadow-inner">
+            {currentInstruction.stageTitle && (
+              <div className="flex flex-wrap items-center justify-between gap-1.5 pb-2 mb-2.5 border-b border-slate-800/80">
+                <span className="text-[11px] font-bold text-sky-300">
+                  {currentInstruction.stageTitle}
+                </span>
+                {currentInstruction.formulaName && (
+                  <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-semibold">
+                    {currentInstruction.formulaName}
+                    {currentInstruction.chunkLength
+                      ? ` (${(currentInstruction.stepInChunk ?? 0) + 1}/${currentInstruction.chunkLength})`
+                      : ''}
+                  </span>
+                )}
+              </div>
+            )}
+
             <div className="flex items-start gap-3.5 sm:gap-4">
               {/* Giant Formula Badge */}
               <div className="w-16 h-16 sm:w-18 sm:h-18 rounded-2xl bg-gradient-to-tr from-sky-500 to-cyan-400 text-slate-950 font-black text-3xl sm:text-4xl flex items-center justify-center shadow-[0_0_20px_rgba(56,189,248,0.5)] shrink-0 font-mono">
@@ -386,6 +516,17 @@ export const TutorControlPanel: React.FC<TutorControlPanelProps> = ({
                 </p>
               </div>
             </div>
+
+            {(currentInstruction.mnemonic || currentInstruction.recognitionTip) && (
+              <div className="mt-2.5 p-2 rounded-xl bg-slate-950/60 border border-slate-800/80 text-[11px] flex flex-col gap-0.5">
+                {currentInstruction.recognitionTip && (
+                  <div className="text-amber-300">👀 {currentInstruction.recognitionTip}</div>
+                )}
+                {currentInstruction.mnemonic && (
+                  <div className="text-emerald-300">🎵 口诀：{currentInstruction.mnemonic}</div>
+                )}
+              </div>
+            )}
 
             {/* Visual Guide Hint */}
             <div className="mt-3 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">

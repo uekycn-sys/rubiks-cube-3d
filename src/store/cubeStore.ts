@@ -6,13 +6,16 @@ import {
   AppMode,
   ColorTheme,
   Face,
+  LblSolution,
+  LblStageId,
   Move,
+  SolverMethod,
   StepInstruction,
   ValidationResult,
   SOLVED_FACELETS,
 } from '../core/types';
 import { validateCubeState } from '../core/cubeValidator';
-import { translateSolution } from '../core/moveTranslator';
+import { translateLblSolution, translateSolution } from '../core/moveTranslator';
 import { CubeState, CENTER_FACELETS } from '../core/cubeState';
 
 // Blank state with only the 6 standard center pieces filled and rest 'X'
@@ -40,6 +43,8 @@ export interface AppState {
   solveError: string | null;
 
   // AI Tutor Mode State
+  solverMethod: SolverMethod;
+  lblSolution: LblSolution | null;
   initialTutorFacelets: string;
   solutionMoves: Move[];
   instructions: StepInstruction[];
@@ -50,6 +55,10 @@ export interface AppState {
   autoPlayInterval: number; // ms: 1500, 3000, 5000
   playbackSpeed: number;    // 0.5, 1.0, 2.0, 4.0
   isTutorFinished: boolean;
+
+  // Interactive LBL Learn Mode State
+  learnInitialFacelets: string | null;
+  learnTargetStage: LblStageId | null;
 
   // Level & Speedrun State (prepared for Phase 4)
   currentLevelIndex: number;
@@ -64,7 +73,7 @@ class StateStore {
 
   constructor() {
     this.state = {
-      mode: 'free',
+      mode: 'learn',
       theme: 'classic',
 
       paintFacelets: BLANK_PAINT_FACELETS,
@@ -73,6 +82,8 @@ class StateStore {
       isSolving: false,
       solveError: null,
 
+      solverMethod: 'lbl',
+      lblSolution: null,
       initialTutorFacelets: SOLVED_FACELETS,
       solutionMoves: [],
       instructions: [],
@@ -83,6 +94,9 @@ class StateStore {
       autoPlayInterval: 1500,
       playbackSpeed: 1.0,
       isTutorFinished: false,
+
+      learnInitialFacelets: null,
+      learnTargetStage: null,
 
       currentLevelIndex: 0,
       unlockedLevels: 1,
@@ -164,10 +178,17 @@ class StateStore {
     });
   }
 
-  // Setup AI Tutor
-  public setupTutor(initialFacelets: string, solution: Move[]): void {
+  // Setup AI Tutor (supports both LBL 7-stage curriculum and Kociemba optimal)
+  public setupTutor(
+    initialFacelets: string,
+    solution: Move[],
+    lblSolution?: LblSolution | null,
+    method?: SolverMethod
+  ): void {
     // Generate state history for each step so stepping forward/backward is 100% deterministic
-    const instructions = translateSolution(solution);
+    const instructions = lblSolution
+      ? translateLblSolution(lblSolution)
+      : translateSolution(solution);
     const history: string[] = [initialFacelets];
 
     const sim = new CubeState(initialFacelets);
@@ -178,6 +199,8 @@ class StateStore {
 
     this.setState({
       mode: 'tutor',
+      solverMethod: method ?? (lblSolution ? 'lbl' : 'kociemba'),
+      lblSolution: lblSolution ?? null,
       initialTutorFacelets: initialFacelets,
       solutionMoves: solution,
       instructions,
@@ -185,6 +208,15 @@ class StateStore {
       historyFacelets: history,
       isAutoPlay: false,
       isTutorFinished: solution.length === 0,
+    });
+  }
+
+  // Launch interactive LBL Academy with a specific cube state and optional target stage
+  public startLearnWithFacelets(facelets: string, targetStage: LblStageId | null = null): void {
+    this.setState({
+      mode: 'learn',
+      learnInitialFacelets: facelets,
+      learnTargetStage: targetStage,
     });
   }
 }

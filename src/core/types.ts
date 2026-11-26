@@ -75,6 +75,52 @@ export interface ValidationResult {
   details?: Record<string, any>;
 }
 
+export type LblStageId = 1 | 2 | 3 | 4 | 5 | 6 | 7;
+
+export type SolverMethod = 'lbl' | 'kociemba';
+
+export type LblCameraView = 'HOME' | 'ISO_FL' | 'ISO_BL' | 'ISO_BR' | 'ISO_BOTTOM';
+
+export interface LblStageMeta {
+  id: LblStageId;
+  name: string;
+  shortName: string;
+  goal: string;
+  formulaDisplay: string;
+  mnemonic: string;
+  tip: string;
+}
+
+export interface LblChunk {
+  id: string;
+  stageId: LblStageId;
+  title: string;
+  formulaName: string;
+  formulaNotation: string;
+  mnemonic: string;
+  recognitionTip: string;
+  moves: Move[];
+  rhythms: string[];
+  recommendedView: LblCameraView;
+  highlightFacelets: number[];
+  startMoveIndex: number;
+}
+
+export interface LblSolution {
+  moves: Move[];
+  chunks: LblChunk[];
+  stageStartIndices: Partial<Record<LblStageId, number>>;
+  initialCompletedStages: boolean[];
+}
+
+export interface LblProgressReport {
+  completedStages: boolean[];
+  currentStage: LblStageId | null;
+  isSolved: boolean;
+  completedCount: number;
+  currentStageMeta: LblStageMeta | null;
+}
+
 export interface StepInstruction {
   move: Move;
   stepNumber: number;
@@ -85,8 +131,16 @@ export interface StepInstruction {
   gesture: string;
   explanation: string;
   targetLayer: Face;
+  stageId?: LblStageId;
+  stageTitle?: string;
+  formulaName?: string;
+  mnemonic?: string;
+  recognitionTip?: string;
+  chunkIndex?: number;
+  stepInChunk?: number;
+  chunkLength?: number;
 }
 
-export type AppMode = 'free' | 'paint' | 'tutor' | 'level' | 'speedrun';
+export type AppMode = 'learn' | 'free' | 'paint' | 'tutor' | 'level' | 'speedrun';
 
 export type ColorTheme = 'classic' | 'cyberpunk' | 'morandi' | 'aurora';

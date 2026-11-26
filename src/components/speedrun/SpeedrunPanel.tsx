@@ -5,6 +5,8 @@ import { PATTERNS, PatternConfig } from '../../data/levels';
 import { soundManager } from '../../audio/SoundManager';
 import { store } from '../../store/cubeStore';
 import { solveCube } from '../../core/solverService';
+import { LBL_STAGES, evaluateLblProgress, solveLBL } from '../../core/lblSolver';
+import { LblProgressReport, SOLVED_FACELETS } from '../../core/types';
 
 interface SpeedrunPanelProps {
   engine: CubeEngine | null;
@@ -21,6 +23,15 @@ export const SpeedrunPanel: React.FC<SpeedrunPanelProps> = ({ engine, onAlignCam
   const [historyRecords, setHistoryRecords] = useState<number[]>([]);
   const [selectedPattern, setSelectedPattern] = useState<string>('');
   const [isAiDemoRunning, setIsAiDemoRunning] = useState(false);
+  const [lblProgress, setLblProgress] = useState<LblProgressReport>(() =>
+    evaluateLblProgress(SOLVED_FACELETS)
+  );
+  const [lblHint, setLblHint] = useState<{
+    stageName: string;
+    formulaName: string;
+    notation: string;
+    mnemonic: string;
+  } | null>(null);
 
   const timerStartTimeRef = useRef(0);
   const timerRafRef = useRef<number | null>(null);
@@ -93,16 +104,20 @@ export const SpeedrunPanel: React.FC<SpeedrunPanelProps> = ({ engine, onAlignCam
     soundManager.playVictory();
   }, []);
 
-  // Hook into engine move complete to update turn count and check solved
+  // Hook into engine move complete to update turn count, LBL progress and check solved
   useEffect(() => {
     if (!engine) return;
+
+    setLblProgress(evaluateLblProgress(engine.getFacelets()));
 
     const originalCallback = engine.callbacks.onMoveComplete;
     engine.callbacks.onMoveComplete = (move, remaining) => {
       originalCallback?.(move, remaining);
+      setLblProgress(evaluateLblProgress(engine.getFacelets()));
       if (isAiDemoRef.current) return;
 
       setTurnCount((prev) => prev + 1);
+      setLblHint(null);
 
       // If timer is running and cube is solved, stop timer automatically
       if (timerStatus === 'running' && engine.isSolved()) {
@@ -177,6 +192,8 @@ export const SpeedrunPanel: React.FC<SpeedrunPanelProps> = ({ engine, onAlignCam
     setScrambleString(moves.join(' '));
 
     engine.applyMovesInstant(moves, true);
+    setLblProgress(evaluateLblProgress(engine.getFacelets()));
+    setLblHint(null);
 
     setElapsedMs(0);
     setTurnCount(0);
@@ -194,6 +211,8 @@ export const SpeedrunPanel: React.FC<SpeedrunPanelProps> = ({ engine, onAlignCam
     setScrambleString(pattern.moves.join(' '));
 
     engine.applyMovesInstant(pattern.moves, true);
+    setLblProgress(evaluateLblProgress(engine.getFacelets()));
+    setLblHint(null);
 
     setElapsedMs(0);
     setTurnCount(0);
@@ -208,6 +227,8 @@ export const SpeedrunPanel: React.FC<SpeedrunPanelProps> = ({ engine, onAlignCam
     setIsAiDemoRunning(false);
     setSelectedPattern('');
     engine.applyMovesInstant([], true);
+    setLblProgress(evaluateLblProgress(SOLVED_FACELETS));
+    setLblHint(null);
 
     setElapsedMs(0);
     setTurnCount(0);
@@ -215,7 +236,7 @@ export const SpeedrunPanel: React.FC<SpeedrunPanelProps> = ({ engine, onAlignCam
     setScrambleString('');
   };
 
-  // One-click AI Tutor call
+  // One-click AI Tutor call (uses preferred method: LBL or Kociemba)
   const handleCallAiTutor = async () => {
     if (!engine) return;
     aiDemoSessionRef.current++;
@@ -225,12 +246,37 @@ export const SpeedrunPanel: React.FC<SpeedrunPanelProps> = ({ engine, onAlignCam
 
     const facelets = engine.getFacelets();
     try {
-      const solution = await solveCube(facelets);
-      store.setupTutor(facelets, solution);
+      const method = store.getState().solverMethod;
+      if (method === 'lbl') {
+        const lbl = solveLBL(facelets);
+        store.setupTutor(facelets, lbl.moves, lbl, 'lbl');
+      } else {
+        const solution = await solveCube(facelets);
+        store.setupTutor(facelets, solution, null, 'kociemba');
+      }
       store.setState({ mode: 'tutor' });
     } catch (err: any) {
       console.error(err);
     }
+  };
+
+  // Show contextual LBL hint for the current state
+  const handleShowLblHint = () => {
+    if (!engine) return;
+    const facelets = engine.getFacelets();
+    const sol = solveLBL(facelets);
+    const chunk = sol.chunks[0];
+    if (!chunk) {
+      setLblHint(null);
+      return;
+    }
+    const stageMeta = LBL_STAGES[chunk.stageId - 1];
+    setLblHint({
+      stageName: stageMeta.name,
+      formulaName: chunk.formulaName,
+      notation: chunk.formulaNotation,
+      mnemonic: chunk.mnemonic,
+    });
   };
 
   // One-click AI Dynamic Demo to restore cube
@@ -398,6 +444,67 @@ export const SpeedrunPanel: React.FC<SpeedrunPanelProps> = ({ engine, onAlignCam
             </button>
           ))}
         </div>
+      </div>
+
+      {/* Live LBL 7-Stage Progress & Contextual Hint */}
+      <div className="rounded-xl bg-slate-950/60 border border-slate-800/80 p-2 flex flex-col gap-1.5">
+        <div className="flex items-center justify-between text-[10px] text-slate-400 px-0.5">
+          <span>层先法实时进度 ({lblProgress.completedCount}/7)</span>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={handleShowLblHint}
+              disabled={lblProgress.isSolved}
+              className="text-sky-300 hover:text-white font-semibold disabled:opacity-40 cursor-pointer"
+            >
+              🎓 层先法提示
+            </button>
+            <span className="text-slate-700">|</span>
+            <button
+              type="button"
+              onClick={() => {
+                if (!engine) return;
+                store.startLearnWithFacelets(engine.getFacelets());
+              }}
+              className="text-emerald-300 hover:text-white font-semibold cursor-pointer"
+            >
+              🖐️ 亲手带练
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-7 gap-1">
+          {LBL_STAGES.map((st, idx) => {
+            const done = lblProgress.completedStages[idx];
+            const active = !lblProgress.isSolved && lblProgress.currentStage === st.id;
+            return (
+              <div
+                key={st.id}
+                className={`py-0.5 rounded-md text-center text-[9px] font-semibold truncate border ${
+                  done
+                    ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                    : active
+                    ? 'bg-sky-500/20 border-sky-400/50 text-sky-200'
+                    : 'bg-slate-900/80 border-slate-800 text-slate-500'
+                }`}
+              >
+                {done ? `✓${st.shortName}` : st.shortName}
+              </div>
+            );
+          })}
+        </div>
+
+        {lblHint && (
+          <div className="p-2 rounded-lg bg-sky-950/60 border border-sky-400/30 text-[11px] flex flex-col gap-0.5 animate-fade-in">
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-sky-300">{lblHint.stageName}</span>
+              <span className="font-mono text-white font-bold">{lblHint.notation}</span>
+            </div>
+            <div className="text-emerald-300">
+              {lblHint.formulaName}：{lblHint.mnemonic}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Bottom Bar: Quick Controls, Reset, AI Tutor */}

@@ -10,6 +10,7 @@ import { LevelSelectModal } from './components/levels/LevelSelectModal';
 import { LevelPlayOverlay } from './components/levels/LevelPlayOverlay';
 import { SpeedrunPanel } from './components/speedrun/SpeedrunPanel';
 import { QuickTurnBar } from './components/common/QuickTurnBar';
+import { LblLearnPanel } from './components/learn/LblLearnPanel';
 import { LevelConfig, LEVELS } from './data/levels';
 import { soundManager } from './audio/SoundManager';
 
@@ -31,6 +32,7 @@ export default function App() {
   const [activeLevel, setActiveLevel] = useState<LevelConfig | null>(LEVELS[0]);
   const [showLevelSelect, setShowLevelSelect] = useState(false);
   const [isMuted, setIsMuted] = useState(soundManager.getMuted());
+  const [learnHighlightMove, setLearnHighlightMove] = useState<Move | null>(null);
 
   // 1. Initialize 3D CubeEngine
   useEffect(() => {
@@ -85,10 +87,16 @@ export default function App() {
       const stepFacelets = historyFacelets[currentStepIndex] || initialTutorFacelets;
       engine.setStateFromFacelets(stepFacelets);
       engine.alignCamera('HOME');
+    } else if (mode === 'learn') {
+      engine.hideTutorGuide();
     } else if (mode === 'level') {
       engine.hideTutorGuide();
     } else if (mode === 'free') {
       engine.hideTutorGuide();
+    }
+
+    if (mode !== 'learn') {
+      setLearnHighlightMove(null);
     }
   }, [mode, initialTutorFacelets]);
 
@@ -148,32 +156,47 @@ export default function App() {
           </span>
         </div>
 
-        {/* 4 Mode Tabs (full width clean row on <640px mobile, inline flex-1 on sm+ desktop) */}
-        <nav className="order-3 sm:order-none w-full sm:w-auto sm:flex-1 sm:min-w-0 grid grid-cols-4 sm:flex items-center gap-1 sm:gap-1.5 overflow-x-auto no-scrollbar">
+        {/* 5 Mode Tabs (full width clean row on <640px mobile, inline flex-1 on sm+ desktop) */}
+        <nav className="order-3 sm:order-none w-full sm:w-auto sm:flex-1 sm:min-w-0 grid grid-cols-5 sm:flex items-center gap-1 sm:gap-1.5 overflow-x-auto no-scrollbar">
+          <button
+            type="button"
+            onClick={() => store.setState({ mode: 'learn' })}
+            className={`px-1 sm:px-3 py-1.5 rounded-full text-[10px] sm:text-xs font-semibold transition-all flex items-center justify-center gap-1 cursor-pointer whitespace-nowrap ${
+              mode === 'learn'
+                ? 'bg-gradient-to-r from-emerald-400 to-sky-400 text-slate-950 shadow-[0_0_15px_rgba(52,211,153,0.5)] font-bold'
+                : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
+            }`}
+          >
+            <span>🎓</span>
+            <span>层先法</span>
+          </button>
+
           <button
             type="button"
             onClick={() => store.setState({ mode: 'paint' })}
-            className={`px-1.5 sm:px-3 py-1.5 rounded-full text-[11px] sm:text-xs font-semibold transition-all flex items-center justify-center gap-1 cursor-pointer whitespace-nowrap ${
+            className={`px-1 sm:px-3 py-1.5 rounded-full text-[10px] sm:text-xs font-semibold transition-all flex items-center justify-center gap-1 cursor-pointer whitespace-nowrap ${
               mode === 'paint'
                 ? 'bg-gradient-to-r from-sky-500 to-cyan-400 text-slate-950 shadow-[0_0_15px_rgba(56,189,248,0.5)] font-bold'
                 : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
             }`}
           >
             <span>📸</span>
-            <span>实景录入</span>
+            <span className="sm:hidden">录入</span>
+            <span className="hidden sm:inline">实景录入</span>
           </button>
 
           <button
             type="button"
             onClick={() => store.setState({ mode: 'tutor' })}
-            className={`px-1.5 sm:px-3 py-1.5 rounded-full text-[11px] sm:text-xs font-semibold transition-all flex items-center justify-center gap-1 cursor-pointer whitespace-nowrap ${
+            className={`px-1 sm:px-3 py-1.5 rounded-full text-[10px] sm:text-xs font-semibold transition-all flex items-center justify-center gap-1 cursor-pointer whitespace-nowrap ${
               mode === 'tutor'
                 ? 'bg-gradient-to-r from-cyan-400 to-emerald-400 text-slate-950 shadow-[0_0_15px_rgba(52,211,153,0.5)] font-bold'
                 : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
             }`}
           >
             <span>✨</span>
-            <span>AI 教学</span>
+            <span className="sm:hidden">教学</span>
+            <span className="hidden sm:inline">AI 教学</span>
             {solutionMoves.length > 0 && (
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
             )}
@@ -184,27 +207,29 @@ export default function App() {
             onClick={() => {
               setShowLevelSelect(true);
             }}
-            className={`px-1.5 sm:px-3 py-1.5 rounded-full text-[11px] sm:text-xs font-semibold transition-all flex items-center justify-center gap-1 cursor-pointer whitespace-nowrap ${
+            className={`px-1 sm:px-3 py-1.5 rounded-full text-[10px] sm:text-xs font-semibold transition-all flex items-center justify-center gap-1 cursor-pointer whitespace-nowrap ${
               mode === 'level'
                 ? 'bg-gradient-to-r from-amber-400 to-yellow-300 text-slate-950 shadow-[0_0_15px_rgba(251,191,36,0.5)] font-bold'
                 : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
             }`}
           >
             <span>🏆</span>
-            <span>20关闯关</span>
+            <span className="sm:hidden">闯关</span>
+            <span className="hidden sm:inline">20关闯关</span>
           </button>
 
           <button
             type="button"
             onClick={() => store.setState({ mode: 'free' })}
-            className={`px-1.5 sm:px-3 py-1.5 rounded-full text-[11px] sm:text-xs font-semibold transition-all flex items-center justify-center gap-1 cursor-pointer whitespace-nowrap ${
+            className={`px-1 sm:px-3 py-1.5 rounded-full text-[10px] sm:text-xs font-semibold transition-all flex items-center justify-center gap-1 cursor-pointer whitespace-nowrap ${
               mode === 'free'
                 ? 'bg-slate-700 text-sky-300 border border-sky-400/40 shadow-md font-bold'
                 : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
             }`}
           >
             <span>🎲</span>
-            <span>随机竞速</span>
+            <span className="sm:hidden">竞速</span>
+            <span className="hidden sm:inline">随机竞速</span>
           </button>
         </nav>
 
@@ -251,6 +276,12 @@ export default function App() {
             <div className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full bg-slate-900/80 backdrop-blur-md border border-white/10 text-[11px] sm:text-xs shadow-lg">
               <span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse shrink-0" />
               <span className="text-slate-200 font-medium whitespace-nowrap">
+                {mode === 'learn' && (
+                  <>
+                    <span className="sm:hidden">🎓 层先法学院</span>
+                    <span className="hidden sm:inline">🎓 层先法学院：边玩边学 7 步还原</span>
+                  </>
+                )}
                 {mode === 'paint' && (
                   <>
                     <span className="sm:hidden">📸 实景涂色</span>
@@ -307,16 +338,27 @@ export default function App() {
             </div>
           </div>
 
-          {/* Floating Bottom: Collapsible Quick Turn Bar (only shown in free & level play modes) */}
-          {(mode === 'free' || mode === 'level') && (
+          {/* Floating Bottom: Collapsible Quick Turn Bar (shown in learn, free & level play modes) */}
+          {(mode === 'learn' || mode === 'free' || mode === 'level') && (
             <div className="absolute bottom-2.5 left-1/2 -translate-x-1/2 sm:left-4 sm:translate-x-0 z-20 pointer-events-auto">
-              <QuickTurnBar engine={engineRef.current} />
+              <QuickTurnBar
+                engine={engineRef.current}
+                highlightMove={mode === 'learn' ? learnHighlightMove : null}
+              />
             </div>
           )}
         </section>
 
         {/* Right / Bottom Side: Dedicated Non-Overlapping Work Control Panel */}
         <aside className="w-full lg:w-[410px] xl:w-[440px] shrink-0 h-[50dvh] sm:h-[52dvh] lg:h-full overflow-y-auto border-t lg:border-t-0 lg:border-l border-white/10 bg-slate-900/80 backdrop-blur-xl p-3 sm:p-4 flex flex-col">
+          {/* MODE 0: Interactive 7-Stage LBL Learning Academy */}
+          {mode === 'learn' && (
+            <LblLearnPanel
+              engine={engineRef.current}
+              onHighlightMoveChange={setLearnHighlightMove}
+            />
+          )}
+
           {/* MODE 1: Real-Cube Paint Panel */}
           {mode === 'paint' && (
             <RealCubePaintPanel

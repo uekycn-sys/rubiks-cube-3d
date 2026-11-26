@@ -5,7 +5,8 @@ import { NetEditor } from './NetEditor';
 import { PaintPalette } from './PaintPalette';
 import { CameraScannerModal } from './CameraScannerModal';
 import { solveCube } from '../../core/solverService';
-import { Face } from '../../core/types';
+import { solveLBL } from '../../core/lblSolver';
+import { Face, SolverMethod } from '../../core/types';
 import { soundManager } from '../../audio/SoundManager';
 
 interface RealCubePaintPanelProps {
@@ -17,8 +18,14 @@ export const RealCubePaintPanel: React.FC<RealCubePaintPanelProps> = ({
   onAlignCamera,
   onEnterTutor,
 }) => {
-  const { paintFacelets, selectedPaintColor, validationResult, isSolving, solveError } =
-    useCubeStore();
+  const {
+    paintFacelets,
+    selectedPaintColor,
+    validationResult,
+    isSolving,
+    solveError,
+    solverMethod,
+  } = useCubeStore();
   const [showScanner, setShowScanner] = useState(false);
 
   const handleFaceletClick = (index: number) => {
@@ -30,21 +37,30 @@ export const RealCubePaintPanel: React.FC<RealCubePaintPanelProps> = ({
     store.setState({ selectedPaintColor: color });
   };
 
+  const handleSelectMethod = (method: SolverMethod) => {
+    store.setState({ solverMethod: method });
+  };
+
   const handleStartSolveAndTutor = async () => {
     if (!validationResult.valid || isSolving) return;
 
     store.setState({ isSolving: true, solveError: null });
 
     try {
-      const solution = await solveCube(paintFacelets);
-      store.setupTutor(paintFacelets, solution);
+      if (solverMethod === 'lbl') {
+        const lbl = solveLBL(paintFacelets);
+        store.setupTutor(paintFacelets, lbl.moves, lbl, 'lbl');
+      } else {
+        const solution = await solveCube(paintFacelets);
+        store.setupTutor(paintFacelets, solution, null, 'kociemba');
+      }
       store.setState({ isSolving: false });
       onEnterTutor();
     } catch (err: any) {
       console.error('Solve failed:', err);
       store.setState({
         isSolving: false,
-        solveError: err?.message || '计算最优解失败，请检查魔方状态',
+        solveError: err?.message || '计算解法失败，请检查魔方状态',
       });
     }
   };
@@ -168,12 +184,38 @@ export const RealCubePaintPanel: React.FC<RealCubePaintPanelProps> = ({
           </div>
         )}
 
+        {/* Strategy Selector: LBL Learning vs Kociemba Fast */}
+        <div className="grid grid-cols-2 gap-1.5 bg-slate-950/70 p-1 rounded-xl border border-slate-800">
+          <button
+            type="button"
+            onClick={() => handleSelectMethod('lbl')}
+            className={`py-1.5 px-2 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+              solverMethod === 'lbl'
+                ? 'bg-gradient-to-r from-sky-500 to-emerald-400 text-slate-950 shadow-sm'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            🎓 层先法教学（推荐学会）
+          </button>
+          <button
+            type="button"
+            onClick={() => handleSelectMethod('kociemba')}
+            className={`py-1.5 px-2 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+              solverMethod === 'kociemba'
+                ? 'bg-sky-500/30 text-sky-200 border border-sky-400/50'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            ⚡ AI 极速最优解 (~20步)
+          </button>
+        </div>
+
         {/* Primary CTA Button */}
         <button
           type="button"
           onClick={handleStartSolveAndTutor}
           disabled={!validationResult.valid || isSolving}
-          className={`w-full py-3.5 px-6 rounded-2xl font-bold text-sm tracking-wide transition-all duration-300 flex items-center justify-center gap-2 shadow-xl ${
+          className={`w-full py-3 px-6 rounded-2xl font-bold text-sm tracking-wide transition-all duration-300 flex items-center justify-center gap-2 shadow-xl ${
             validationResult.valid && !isSolving
               ? 'bg-gradient-to-r from-sky-500 via-cyan-400 to-emerald-400 text-slate-950 hover:brightness-110 hover:scale-[1.01] hover:shadow-[0_0_25px_rgba(56,189,248,0.5)] cursor-pointer'
               : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700/50'
@@ -182,14 +224,29 @@ export const RealCubePaintPanel: React.FC<RealCubePaintPanelProps> = ({
           {isSolving ? (
             <>
               <div className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
-              <span>AI 两阶段 Kociemba 最优解计算中...</span>
+              <span>AI 正在计算解法...</span>
             </>
           ) : (
             <>
-              <span>✨ AI 算出最优解，开始一步步教我！</span>
+              <span>
+                {solverMethod === 'lbl'
+                  ? '🎓 生成层先法 7 步教程，带我复原！'
+                  : '✨ AI 算出最优解，开始一步步教我！'}
+              </span>
             </>
           )}
         </button>
+
+        {/* Direct Interactive LBL Practice CTA */}
+        {validationResult.valid && (
+          <button
+            type="button"
+            onClick={() => store.startLearnWithFacelets(paintFacelets)}
+            className="w-full py-2 px-4 rounded-xl glass-button text-emerald-300 hover:text-white text-xs font-semibold cursor-pointer"
+          >
+            🖐️ 直接进入「层先法学院」亲手跟练此魔方
+          </button>
+        )}
       </div>
 
       {/* Camera Real-Time Scanner Modal */}

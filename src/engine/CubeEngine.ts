@@ -18,7 +18,18 @@ import { CubeState, CENTER_FACELETS } from '../core/cubeState';
 import { THEME_PALETTES, CubePalette } from './themes';
 import { createLayerHighlight, createCurvedArrow } from './arrowHelper';
 
-export type CameraViewPreset = 'HOME' | 'TOP' | 'BOTTOM' | 'FRONT' | 'BACK' | 'LEFT' | 'RIGHT';
+export type CameraViewPreset =
+  | 'HOME'
+  | 'TOP'
+  | 'BOTTOM'
+  | 'FRONT'
+  | 'BACK'
+  | 'LEFT'
+  | 'RIGHT'
+  | 'ISO_FL'
+  | 'ISO_BL'
+  | 'ISO_BR'
+  | 'ISO_BOTTOM';
 
 export interface CubeEngineCallbacks {
   onMoveComplete?: (move: Move, remaining: number) => void;
@@ -53,7 +64,7 @@ export class CubeEngine {
   private baseTurnDuration = 320; // ms
 
   // Interaction
-  private mode: 'free' | 'paint' | 'tutor' | 'level' | 'speedrun' = 'free';
+  private mode: 'learn' | 'free' | 'paint' | 'tutor' | 'level' | 'speedrun' = 'free';
   private raycaster = new THREE.Raycaster();
   private mouse = new THREE.Vector2();
   private isPointerDown = false;
@@ -63,6 +74,8 @@ export class CubeEngine {
   private intersectedSticker: THREE.Mesh | null = null;
   private hoveredFaceletIndex: number | null = null;
   private currentPreviewMove: Move | null = null;
+  private guidedMove: Move | null = null;
+  private highlightedStickers: THREE.Mesh[] = [];
   private hasTriggeredSwipeMove = false;
 
   // Shared materials / cleanup references
@@ -353,7 +366,7 @@ export class CubeEngine {
     return this.cubeState.isSolved();
   }
 
-  public setInteractionMode(mode: 'free' | 'paint' | 'tutor' | 'level' | 'speedrun'): void {
+  public setInteractionMode(mode: 'learn' | 'free' | 'paint' | 'tutor' | 'level' | 'speedrun'): void {
     this.mode = mode;
     if (this.hoveredFaceletIndex !== null) {
       const prevMesh = this.stickerMeshes[this.hoveredFaceletIndex];
@@ -364,6 +377,8 @@ export class CubeEngine {
       this.hoveredFaceletIndex = null;
     }
     this.currentPreviewMove = null;
+    this.guidedMove = null;
+    this.clearFaceletHighlights();
     if (mode === 'paint') {
       this.hideTutorGuide();
     }
@@ -650,7 +665,63 @@ export class CubeEngine {
   }
 
   /**
-   * Smoothly aligns camera to 6 standard face views or isometric Home
+   * Sets a persistent guided move arrow (preserved across aborted drags in learn mode)
+   */
+  public setGuidedMove(move: Move | null): void {
+    this.guidedMove = move;
+    if (move) {
+      this.showTutorGuide(move);
+    } else {
+      this.hideTutorGuide();
+    }
+  }
+
+  /**
+   * Clears all target-piece emissive sticker highlights
+   */
+  public clearFaceletHighlights(): void {
+    for (const sticker of this.highlightedStickers) {
+      const mat = sticker.material as THREE.MeshPhysicalMaterial;
+      if (mat) {
+        mat.emissive.setHex(0x000000);
+        mat.emissiveIntensity = 0;
+      }
+    }
+    this.highlightedStickers = [];
+  }
+
+  /**
+   * Highlights stickers currently occupying the given spatial 54-facelet indices
+   */
+  public highlightFacelets(indices: number[]): void {
+    this.clearFaceletHighlights();
+    if (indices.length === 0) return;
+
+    const targetSet = new Set<number>(indices);
+    for (const sticker of this.stickerMeshes) {
+      if (!sticker) continue;
+      const cubie = sticker.userData?.cubie as THREE.Mesh | undefined;
+      if (!cubie) continue;
+
+      sticker.updateMatrixWorld(true);
+      const worldNormal = new THREE.Vector3(0, 0, 1)
+        .transformDirection(sticker.matrixWorld)
+        .round();
+      const face = this.normalToFace(worldNormal);
+      const pos = cubie.position.clone().round();
+      const liveIdx = this.coordsToFaceletIndex(face, pos.x, pos.y, pos.z);
+
+      if (targetSet.has(liveIdx)) {
+        const mat = sticker.material as THREE.MeshPhysicalMaterial;
+        mat.emissive.setHex(0xFBBF24);
+        mat.emissiveIntensity = 0.42;
+        this.highlightedStickers.push(sticker);
+      }
+    }
+  }
+
+  /**
+   * Smoothly aligns camera to 6 standard face views or isometric presets
    */
   public alignCamera(view: CameraViewPreset): void {
     const targetPos = new THREE.Vector3();
@@ -659,6 +730,18 @@ export class CubeEngine {
     switch (view) {
       case 'HOME':
         targetPos.set(3.6, 3.2, 5.8);
+        break;
+      case 'ISO_FL':
+        targetPos.set(-3.6, 3.2, 5.8);
+        break;
+      case 'ISO_BL':
+        targetPos.set(-3.6, 3.2, -5.8);
+        break;
+      case 'ISO_BR':
+        targetPos.set(3.6, 3.2, -5.8);
+        break;
+      case 'ISO_BOTTOM':
+        targetPos.set(3.6, -3.2, 5.8);
         break;
       case 'TOP': // U (+Y)
         targetPos.set(0.001, distance, 0.001);
@@ -819,6 +902,7 @@ export class CubeEngine {
       const dist = Math.hypot(deltaX, deltaY);
       const duration = performance.now() - this.pointerDownTime;
 
+      let appliedMoveOnUp = false;
       if (!this.hasTriggeredSwipeMove) {
         // Click detection (short duration, small distance) in paint mode
         if (dist < 10 && duration < 400) {
@@ -840,6 +924,7 @@ export class CubeEngine {
                 )
               : null);
           if (move) {
+            appliedMoveOnUp = true;
             this.applyMove(move);
           }
         }
@@ -848,6 +933,9 @@ export class CubeEngine {
       if (this.currentPreviewMove) {
         this.hideTutorGuide();
         this.currentPreviewMove = null;
+      }
+      if (!this.hasTriggeredSwipeMove && !appliedMoveOnUp && this.guidedMove) {
+        this.showTutorGuide(this.guidedMove);
       }
       this.intersectedSticker = null;
       this.hasTriggeredSwipeMove = false;

@@ -5,7 +5,8 @@
  * White top, Green front, Red right, Orange left, Yellow bottom, Blue back.
  */
 
-import { Move, Face, StepInstruction } from './types';
+import { Move, Face, StepInstruction, LblSolution } from './types';
+import { LBL_STAGES } from './lblSolver';
 
 interface MoveMetadata {
   title: string;
@@ -224,4 +225,33 @@ export function translateMove(move: Move, stepIndex = 0, totalSteps = 1): StepIn
  */
 export function translateSolution(solution: Move[]): StepInstruction[] {
   return solution.map((m, idx) => translateMove(m, idx, solution.length));
+}
+
+/**
+ * Translates an LBL solution into rich step instructions carrying stage, formula, and mnemonic context
+ */
+export function translateLblSolution(lbl: LblSolution): StepInstruction[] {
+  const totalSteps = lbl.moves.length;
+  const instructions: StepInstruction[] = [];
+
+  lbl.chunks.forEach((chunk, chunkIdx) => {
+    const stageMeta = LBL_STAGES[chunk.stageId - 1];
+    chunk.moves.forEach((move, stepInChunk) => {
+      const globalIdx = chunk.startMoveIndex + stepInChunk;
+      const base = translateMove(move, globalIdx, totalSteps);
+      instructions.push({
+        ...base,
+        stageId: chunk.stageId,
+        stageTitle: stageMeta.name,
+        formulaName: chunk.formulaName,
+        mnemonic: chunk.mnemonic,
+        recognitionTip: chunk.recognitionTip,
+        chunkIndex: chunkIdx,
+        stepInChunk,
+        chunkLength: chunk.moves.length,
+      });
+    });
+  });
+
+  return instructions;
 }
